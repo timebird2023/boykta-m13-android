@@ -1,0 +1,272 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0B0F17"
+    android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="بويكتا M13 — رفيقك الذكي 24/24"
+            android:textColor="#F1F5F9"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <com.boykta.assistant.ui.BoyktaRobotView
+            android:id="@+id/robotView"
+            android:layout_width="170dp"
+            android:layout_height="170dp"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginTop="8dp" />
+
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="#111827"
+            android:padding="14dp"
+            android:textColor="#CBD5E1"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/tvTtsWarning"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:background="#451A03"
+            android:padding="12dp"
+            android:text="تنبيه: الصوت العربي غير مثبت في هاتفك حالياً (لذلك كان ينطق بالإنجليزية). اضغط زر تحميل الصوت العربي بالأسفل."
+            android:textColor="#FDE68A"
+            android:textSize="13sp"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnStartBoykta"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="6dp"
+                android:layout_weight="1"
+                android:text="تشغيل بويكتا 24/24" />
+
+            <Button
+                android:id="@+id/btnStopBoykta"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:layout_weight="1"
+                android:text="إيقاف الخدمة" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/btnInstallArabicVoice"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="تحميل الصوت العربي الذكوري للهاتف" />
+
+        <Button
+            android:id="@+id/btnDownloadFusha"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="تحميل حزمة الفصحى الدقيقة (318MB) إلى بطاقة SD" />
+
+        <Button
+            android:id="@+id/btnDownloadDarija"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="تحميل حزمة الدارجة الجزائرية/المغاربية (158MB) إلى SD" />
+
+        <ProgressBar
+            android:id="@+id/progressDownload"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:max="100"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/tvDownloadStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textColor="#10B981"
+            android:textSize="12sp"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnGrantPermissions"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:layout_weight="1"
+                android:text="أذونات الهاتف"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/btnAccessibilityPermission"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:layout_weight="1"
+                android:text="التحكم الشامل"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/btnSystemWritePermission"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="إذن السطوع"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="تجربة سريعة لأوامر بويكتا (حتى وسط الضحك):"
+            android:textColor="#94A3B8"
+            android:textSize="13sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/chipFreeFire"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:layout_weight="1"
+                android:text="فري فاير"
+                android:textSize="11sp" />
+
+            <Button
+                android:id="@+id/chipCamera"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:layout_weight="1"
+                android:text="الكاميرا"
+                android:textSize="11sp" />
+
+            <Button
+                android:id="@+id/chipNotifs"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:layout_weight="1"
+                android:text="الإشعارات"
+                android:textSize="11sp" />
+
+            <Button
+                android:id="@+id/chipCleanRam"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:layout_weight="1"
+                android:text="الرام"
+                android:textSize="11sp" />
+
+            <Button
+                android:id="@+id/chipBattery"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="الشحن"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <EditText
+            android:id="@+id/etCommandTest"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="#111827"
+            android:hint="جرب: بويكتا افتح فري فاير هههه خويا اسمع"
+            android:padding="12dp"
+            android:textColor="#F8FAFC"
+            android:textColorHint="#64748B" />
+
+        <Button
+            android:id="@+id/btnRunCommand"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="تنفيذ والرد بالصوت العربي" />
+
+        <TextView
+            android:id="@+id/tvLog"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="#111827"
+            android:minHeight="90dp"
+            android:padding="12dp"
+            android:text="سجل الأوامر والردود سيظهر هنا..."
+            android:textColor="#10B981"
+            android:textSize="14sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="أضف أمراً مخصصاً من الهاتف مباشرة:"
+            android:textColor="#94A3B8"
+            android:textSize="13sp" />
+
+        <EditText
+            android:id="@+id/etCustomTrigger"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:background="#111827"
+            android:hint="العبارة المنطوقة (مثلاً: كيفاش الجو)"
+            android:padding="10dp"
+            android:textColor="#F8FAFC"
+            android:textColorHint="#64748B" />
+
+        <EditText
+            android:id="@+id/etCustomReply"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:background="#111827"
+            android:hint="رد بويكتا الذكوري بالعربية"
+            android:padding="10dp"
+            android:textColor="#F8FAFC"
+            android:textColorHint="#64748B" />
+
+        <Button
+            android:id="@+id/btnSaveCustomRule"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="حفظ الأمر في الهاتف" />
+
+    </LinearLayout>
+</ScrollView>
