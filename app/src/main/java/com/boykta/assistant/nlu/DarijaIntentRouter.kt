@@ -291,18 +291,18 @@ object DarijaIntentRouter {
             .replace('آ', 'ا')
             .replace('ة', 'ه')
             .replace('ى', 'ي')
-            .replace(Regex("\s+"), " ")
+            .replace(Regex("\\s+"), " ")
             .lowercase(Locale.ROOT)
     }
 
     private fun stripNoiseAndChatter(norm: String): String {
         return norm
-            .replace(Regex("\b(ه+|هاها+|خهه+|هه+)\b"), " ")
+            .replace(Regex("\\b(ه+|هاها+|خهه+|هه+)\\b"), " ")
             .replace(
-                Regex("\b(والله|اسمع|شوف|زعما|برك|ياخي|صاحبي|عادي|لالا|ايه|واه|هايا|ديريكت|خويا|ياخو|من فضلك|عافاك|ونضحك|نهدر)\b"),
+                Regex("\\b(والله|اسمع|شوف|زعما|برك|ياخي|صاحبي|عادي|لالا|ايه|واه|هايا|ديريكت|خويا|ياخو|من فضلك|عافاك|ونضحك|نهدر)\\b"),
                 " "
             )
-            .replace(Regex("\s+"), " ")
+            .replace(Regex("\\s+"), " ")
             .trim()
     }
 
@@ -335,7 +335,7 @@ object DarijaIntentRouter {
         }
 
         // 1. Click visible UI button via Accessibility ("اضغط على ...", "كليكي على ...")
-        val clickMatch = Regex("(?:اضغط|كليكي|اكليكي|انقر)\s+(?:على|علي|في)?\s*(.+)").find(cleaned)
+        val clickMatch = Regex("(?:اضغط|كليكي|اكليكي|انقر)\\s+(?:على|علي|في)?\\s*(.+)").find(cleaned)
         if (clickMatch != null) {
             val targetText = clickMatch.groupValues[1].trim()
             val acc = BoyktaAccessibilityService.instance
@@ -349,7 +349,7 @@ object DarijaIntentRouter {
 
         // 2. Offline Math Calculator
         if (cleaned.contains("احسب") ||
-            Regex("\d+\s*(زايد|زائد|ناقص|في|ضرب|تقسيم|[+\-*/×÷])\s*\d+").containsMatchIn(cleaned)
+            Regex("\\d+\\s*(زايد|زائد|ناقص|في|ضرب|تقسيم|[+\\-*/×÷])\\s*\\d+").containsMatchIn(cleaned)
         ) {
             val mathResult = tryOfflineMath(cleaned)
             if (mathResult != null) return mathResult
@@ -465,9 +465,9 @@ object DarijaIntentRouter {
             .replace("ناقص", "-")
             .replace(Regex("(ضرب|في|×)"), "*")
             .replace(Regex("(مقسومه علي|تقسيم|علي|÷)"), "/")
-            .replace(Regex("\s+"), " ")
+            .replace(Regex("\\s+"), " ")
             .trim()
-        val m = Regex("(\d+(?:\.\d+)?)\s*([+\-*/])\s*(\d+(?:\.\d+)?)").find(expr) ?: return null
+        val m = Regex("(\\d+(?:\\.\\d+)?)\\s*([+\\-*/])\\s*(\\d+(?:\\.\\d+)?)").find(expr) ?: return null
         val a = m.groupValues[1].toDoubleOrNull() ?: return null
         val op = m.groupValues[2]
         val b = m.groupValues[3].toDoubleOrNull() ?: return null
@@ -690,7 +690,7 @@ object DarijaIntentRouter {
 
         val appSearchText = cleanedQuery
             .replace(Regex("(افتح|حل|شعل|ديرلي|ادخل|روح|تطبيق|برنامج|لعبه|اللعبه)"), " ")
-            .replace(Regex("\s+"), " ")
+            .replace(Regex("\\s+"), " ")
             .trim()
 
         for ((arKey, pkgHints) in arabicToPackageHints) {
@@ -739,7 +739,7 @@ object DarijaIntentRouter {
                 Regex("(اقري|اقرا|شحال|اعطيني|من|جهات الاتصال|في|رقم|هاتف|نيميرو|نمرو|تاع|تع)"),
                 " "
             )
-            .replace(Regex("\s+"), " ")
+            .replace(Regex("\\s+"), " ")
             .trim()
 
         for (c in contacts) {
