@@ -11,8 +11,8 @@ android {
         applicationId = "com.boykta.assistant"
         minSdk = 26
         targetSdk = 34
-        versionCode = 4
-        versionName = "2.0.0-m13"
+        versionCode = 5
+        versionName = "3.0.0-m13"
 
         ndk {
             abiFilters += listOf("armeabi-v7a")
@@ -50,10 +50,12 @@ android {
 }
 
 dependencies {
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-ktx:1.9.2")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
     implementation("com.alphacephei:vosk-android:0.3.47")
     implementation("net.java.dev.jna:jna:5.13.0@aar")
+    implementation("org.apache.commons:commons-compress:1.26.2")
 }

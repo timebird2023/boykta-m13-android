@@ -125,23 +125,20 @@ class BoyktaRobotView @JvmOverloads constructor(
         canvas.translate((w - 220f * scale) / 2f, (h - 220f * scale) / 2f)
         canvas.scale(scale, scale)
 
-        // Subtle glowing aura behind companion
         auraPaint.shader = RadialGradient(
             110f,
             106f,
             98f,
-            Color.argb(if (currentMood == Mood.LISTENING) 85 else 48, Color.red(accent), Color.green(accent), Color.blue(accent)),
+            Color.argb(if (currentMood == Mood.LISTENING) 95 else 48, Color.red(accent), Color.green(accent), Color.blue(accent)),
             Color.TRANSPARENT,
             Shader.TileMode.CLAMP
         )
         canvas.drawCircle(110f, 106f, 96f, auraPaint)
 
-        // Ground shadow
         canvas.drawOval(64f, 197f, 156f, 211f, shadowPaint)
 
         canvas.translate(0f, floatY)
 
-        // Sculpted floating torso
         bodyPaint.shader = LinearGradient(0f, 138f, 0f, 196f, Color.parseColor("#263348"), Color.parseColor("#0F172A"), Shader.TileMode.CLAMP)
         torsoPath.reset()
         torsoPath.moveTo(76f, 146f)
@@ -154,14 +151,12 @@ class BoyktaRobotView @JvmOverloads constructor(
         strokePaint.strokeWidth = 2f
         canvas.drawPath(torsoPath, strokePaint)
 
-        // Chest Core Emblem
         visorPaint.shader = LinearGradient(100f, 160f, 120f, 178f, Color.parseColor("#090E17"), Color.parseColor("#05080F"), Shader.TileMode.CLAMP)
         canvas.drawCircle(110f, 169f, 9f, visorPaint)
         accentStrokePaint.strokeWidth = 2f
         canvas.drawCircle(110f, 169f, 9f, accentStrokePaint)
         canvas.drawCircle(110f, 169f, 3.8f + 1.1f * sin(phase * 2f), accentPaint)
 
-        // Articulated curved floating arms
         shellPaint.shader = LinearGradient(0f, 38f, 0f, 150f, Color.parseColor("#334155"), Color.parseColor("#0F172A"), Shader.TileMode.CLAMP)
         val armWave = if (currentMood == Mood.HAPPY) 12f * sin(phase * 3f) else 3f * sin(phase)
 
@@ -187,12 +182,10 @@ class BoyktaRobotView @JvmOverloads constructor(
         canvas.drawPath(rightArmPath, strokePaint)
         canvas.restore()
 
-        // Antenna
         strokePaint.strokeWidth = 3.5f
         canvas.drawLine(110f, 38f, 110f, 23f, strokePaint)
         canvas.drawCircle(110f, 19f, 5.8f + 1.2f * sin(phase * 2f), accentPaint)
 
-        // Audio Ear Pods
         rectEarLeft.set(34f, 80f, 46f, 116f)
         rectEarRight.set(174f, 80f, 186f, 116f)
         canvas.drawRoundRect(rectEarLeft, 6f, 6f, bodyPaint)
@@ -201,26 +194,22 @@ class BoyktaRobotView @JvmOverloads constructor(
         canvas.drawRoundRect(rectEarLeft, 6f, 6f, accentStrokePaint)
         canvas.drawRoundRect(rectEarRight, 6f, 6f, accentStrokePaint)
 
-        // Sculpted Rounded Head
         rectHead.set(44f, 38f, 176f, 142f)
         canvas.drawRoundRect(rectHead, 44f, 44f, shellPaint)
         strokePaint.strokeWidth = 2f
         canvas.drawRoundRect(rectHead, 44f, 44f, strokePaint)
 
-        // Top Gloss Highlight
         glossPaint.strokeWidth = 3f
         smilePath.reset()
         smilePath.moveTo(74f, 47f)
         smilePath.cubicTo(96f, 42f, 124f, 42f, 146f, 47f)
         canvas.drawPath(smilePath, glossPaint)
 
-        // Curved OLED Glass Visor
         rectVisor.set(56f, 56f, 164f, 126f)
         canvas.drawRoundRect(rectVisor, 30f, 30f, visorPaint)
         strokePaint.strokeWidth = 2f
         canvas.drawRoundRect(rectVisor, 30f, 30f, strokePaint)
 
-        // Expressive Eyes
         when {
             currentMood == Mood.HAPPY -> {
                 accentStrokePaint.strokeWidth = 4.5f
@@ -251,7 +240,6 @@ class BoyktaRobotView @JvmOverloads constructor(
             }
         }
 
-        // Mouth / Voice Waveform
         when (currentMood) {
             Mood.SPEAKING -> {
                 val bars = floatArrayOf(94f, 102f, 110f, 118f, 126f)

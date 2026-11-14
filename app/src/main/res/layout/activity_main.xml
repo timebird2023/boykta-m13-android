@@ -26,6 +26,18 @@
             android:layout_marginTop="8dp" />
 
         <TextView
+            android:id="@+id/tvLiveMic"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:background="#064E3B"
+            android:padding="12dp"
+            android:text="حالة المستشعر: اضغط «تشغيل بويكتا 24/24» ثم قل «بويكتا»..."
+            android:textColor="#ECFDF5"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
             android:id="@+id/tvStatus"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -42,7 +54,7 @@
             android:layout_marginTop="10dp"
             android:background="#451A03"
             android:padding="12dp"
-            android:text="تنبيه: الصوت العربي غير مثبت في هاتفك حالياً (لذلك كان ينطق بالإنجليزية). اضغط زر تحميل الصوت العربي بالأسفل."
+            android:text="لتسمع بويكتا يتكلم بالعربية بصوت ذكوري بدون الحاجة لصوت الهاتف الإنجليزي: اضغط الزر بالأسفل لتحميل «صوت بويكتا العربي الذكوري المدمج (64MB)»."
             android:textColor="#FDE68A"
             android:textSize="13sp"
             android:visibility="gone" />
@@ -59,7 +71,10 @@
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="6dp"
                 android:layout_weight="1"
-                android:text="تشغيل بويكتا 24/24" />
+                android:backgroundTint="#10B981"
+                android:text="تشغيل بويكتا 24/24"
+                android:textColor="#042F2E"
+                android:textStyle="bold" />
 
             <Button
                 android:id="@+id/btnStopBoykta"
@@ -71,25 +86,28 @@
         </LinearLayout>
 
         <Button
-            android:id="@+id/btnInstallArabicVoice"
+            android:id="@+id/btnDownloadKareemVoice"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="تحميل الصوت العربي الذكوري للهاتف" />
+            android:backgroundTint="#059669"
+            android:text="تحميل صوت بويكتا العربي الذكوري المدمج (64MB) — يتكلم بلا هاتف"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold" />
 
         <Button
             android:id="@+id/btnDownloadFusha"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:text="تحميل حزمة الفصحى الدقيقة (318MB) إلى بطاقة SD" />
+            android:text="تحميل حزمة السمع الفصحى الدقيقة (318MB) إلى SD" />
 
         <Button
             android:id="@+id/btnDownloadDarija"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:text="تحميل حزمة الدارجة الجزائرية/المغاربية (158MB) إلى SD" />
+            android:text="تحميل حزمة السمع الدارجة الجزائرية (158MB) إلى SD" />
 
         <ProgressBar
             android:id="@+id/progressDownload"
@@ -121,8 +139,9 @@
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="4dp"
                 android:layout_weight="1"
+                android:maxLines="1"
                 android:text="أذونات الهاتف"
-                android:textSize="12sp" />
+                android:textSize="11sp" />
 
             <Button
                 android:id="@+id/btnAccessibilityPermission"
@@ -130,22 +149,32 @@
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="4dp"
                 android:layout_weight="1"
+                android:maxLines="1"
                 android:text="التحكم الشامل"
-                android:textSize="12sp" />
+                android:textSize="11sp" />
 
             <Button
                 android:id="@+id/btnSystemWritePermission"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
+                android:maxLines="1"
                 android:text="إذن السطوع"
-                android:textSize="12sp" />
+                android:textSize="11sp" />
         </LinearLayout>
+
+        <Button
+            android:id="@+id/btnOverlayPermission"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="تفعيل نافذة بويكتا المنبثقة فوق التطبيقات (مثل OK Google)"
+            android:textSize="12sp" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="14dp"
             android:text="تجربة سريعة لأوامر بويكتا (حتى وسط الضحك):"
             android:textColor="#94A3B8"
             android:textSize="13sp" />
@@ -162,8 +191,9 @@
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="4dp"
                 android:layout_weight="1"
+                android:maxLines="1"
                 android:text="فري فاير"
-                android:textSize="11sp" />
+                android:textSize="12sp" />
 
             <Button
                 android:id="@+id/chipCamera"
@@ -171,17 +201,25 @@
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="4dp"
                 android:layout_weight="1"
+                android:maxLines="1"
                 android:text="الكاميرا"
-                android:textSize="11sp" />
+                android:textSize="12sp" />
 
             <Button
                 android:id="@+id/chipNotifs"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginEnd="4dp"
                 android:layout_weight="1"
+                android:maxLines="1"
                 android:text="الإشعارات"
-                android:textSize="11sp" />
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:orientation="horizontal">
 
             <Button
                 android:id="@+id/chipCleanRam"
@@ -189,16 +227,28 @@
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="4dp"
                 android:layout_weight="1"
-                android:text="الرام"
-                android:textSize="11sp" />
+                android:maxLines="1"
+                android:text="نضف الرام"
+                android:textSize="12sp" />
 
             <Button
                 android:id="@+id/chipBattery"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
                 android:layout_weight="1"
+                android:maxLines="1"
                 android:text="الشحن"
-                android:textSize="11sp" />
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/chipTestWake"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:maxLines="1"
+                android:text="نداء بويكتا"
+                android:textSize="12sp" />
         </LinearLayout>
 
         <EditText

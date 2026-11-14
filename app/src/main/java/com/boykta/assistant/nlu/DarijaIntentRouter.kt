@@ -309,14 +309,7 @@ object DarijaIntentRouter {
     fun executeCommand(context: Context, rawUtterance: String): String {
         val norm = normalizeArabic(rawUtterance)
         val hasLaughter = Regex("(ههه|هاها|خهه)").containsMatchIn(norm)
-        val wakeNorm = normalizeArabic("بويكتا")
-        val withoutWake = norm
-            .replace(wakeNorm, " ")
-            .replace("بوكتا", " ")
-            .replace("بويكتة", " ")
-            .replace("يا ", " ")
-            .trim()
-
+        val withoutWake = WakeWordMatcher.stripWakeWord(norm, "بويكتا")
         val cleaned = stripNoiseAndChatter(withoutWake)
 
         if (cleaned.isEmpty()) {
@@ -327,19 +320,17 @@ object DarijaIntentRouter {
             }
         }
 
-        // 0. Check User Custom Rules saved on phone
         for (custom in CustomRuleStore.getRules(context)) {
             if (custom.trigger.isNotBlank() && cleaned.contains(normalizeArabic(custom.trigger))) {
                 return custom.reply
             }
         }
 
-        // 1. Click visible UI button via Accessibility ("اضغط على ...", "كليكي على ...")
         val clickMatch = Regex("(?:اضغط|كليكي|اكليكي|انقر)\\s+(?:على|علي|في)?\\s*(.+)").find(cleaned)
         if (clickMatch != null) {
             val targetText = clickMatch.groupValues[1].trim()
             val acc = BoyktaAccessibilityService.instance
-                ?: return "لازم تفعل صلاحية Accessibility من التطبيق باش نقدر نضغطلك على $targetText خويا."
+                ?: return "لازم تفعل صلاحية التحكم الشامل من التطبيق باش نقدر نضغطلك على $targetText خويا."
             return if (acc.clickOnScreenText(targetText)) {
                 "تم خويا، راني ضغطتلك على $targetText."
             } else {
@@ -347,7 +338,6 @@ object DarijaIntentRouter {
             }
         }
 
-        // 2. Offline Math Calculator
         if (cleaned.contains("احسب") ||
             Regex("\\d+\\s*(زايد|زائد|ناقص|في|ضرب|تقسيم|[+\\-*/×÷])\\s*\\d+").containsMatchIn(cleaned)
         ) {
@@ -355,7 +345,6 @@ object DarijaIntentRouter {
             if (mathResult != null) return mathResult
         }
 
-        // 3. Read Contact Phone Number ("اقرى رقم هاتف تع نافع")
         val readNumberTriggers = listOf(
             "اقري رقم", "اقرا رقم", "اقري نمرو", "اقري نيميرو",
             "شحال رقم", "شحال نيميرو", "اعطيني رقم", "رقم هاتف", "نيميرو تع", "رقم تع"
@@ -366,7 +355,6 @@ object DarijaIntentRouter {
             return readContactNumberByQuery(context, cleaned)
         }
 
-        // 4. Call Contact ("عيط ل...", "روح عيط ل...", "اتصل ب...")
         val callVerbs = listOf("عيط", "اتصل", "صوني", "تصل")
         if (callVerbs.any { cleaned.contains(it) }) {
             for (c in contacts) {
@@ -385,7 +373,6 @@ object DarijaIntentRouter {
             return "شكون حبيت نعيطلو خويا؟ ما لقيتش هاد الاسم في جهات الاتصال."
         }
 
-        // 5. Noise-tolerant scoring against Configured Rules
         var bestRule: CommandRule? = null
         var bestScore = 0
         for (rule in rules) {
@@ -415,7 +402,6 @@ object DarijaIntentRouter {
             return performAction(context, bestRule)
         }
 
-        // 6. Universal Dynamic App Launcher ("افتح / حل <أي تطبيق أو لعبة>")
         val openVerbs = listOf("افتح", "حل", "شعل", "ديرلي", "ادخل", "روح")
         if (openVerbs.any { cleaned.contains(it) }) {
             if (cleaned.contains("كاميرا") || cleaned.contains("لكاميرا")) {
@@ -433,7 +419,6 @@ object DarijaIntentRouter {
             return findAndLaunchAnyInstalledApp(context, cleaned)
         }
 
-        // 7. Authentic Male Algerian Companion Personality (Never says "حدث خطأ")
         tryPersonaReply(cleaned, hasLaughter)?.let { return it }
 
         return "سمعتك تهدر خويا بصح مع الحس ما لقطتش الطلب مليح، قولي برك: افتح فري فاير، ارجع للخلف، هبط الإشعارات، ولا نضف الرام."
@@ -447,10 +432,10 @@ object DarijaIntentRouter {
             return "بلا مزية خويا، أنا في خدمتك في أي وقت 24 على 24."
         }
         if (cleaned.contains("نكته") || cleaned.contains("ضحكني")) {
-            return "واحد سقسا تليفونو ام 13: علاش ما تعياش؟ قالو عندي بويكتا ينضفلي الرام ويخدم معايا 24 على 24!"
+            return "واحد سقسا تليفونو ام ثلاثة عشر: علاش ما تعياش؟ قالو عندي بويكتا ينضفلي الرام ويخدم معايا 24 على 24!"
         }
         if (cleaned.contains("شكون انت") || cleaned.contains("عرفني")) {
-            return "أنا بويكتا خويا، مساعدك الشخصي على هاتف ام 13، نسمعك حتى وسط الضجيج وننفذ كلش بدون إنترنت."
+            return "أنا بويكتا خويا، مساعدك الشخصي على هاتف إم ثلاثة عشر، نسمعك حتى وسط الضجيج وننفذ كلش بدون إنترنت."
         }
         if (hasLaughter && cleaned.length < 18) {
             return "دوم الضحكة يا خويا! كي تحتاج نحلك كاش تطبيق ولا لعبة قولي برك."
@@ -532,7 +517,7 @@ object DarijaIntentRouter {
 
     private fun performAccessibilityNav(navTarget: String, reply: String): String {
         val acc = BoyktaAccessibilityService.instance
-            ?: return "خويا، فعل صلاحية التحكم الشامل Accessibility من التطبيق باش نقدر نتحكم في كل بلاصة في الهاتف."
+            ?: return "خويا، فعل صلاحية التحكم الشامل من التطبيق باش نقدر نتحكم في كل بلاصة في الهاتف."
         return if (acc.performNavAction(navTarget)) {
             reply
         } else {
@@ -547,7 +532,7 @@ object DarijaIntentRouter {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(intent)
-            return "فعل إذن تعديل إعدادات النظام (Write Settings) باش نتحكم في الإضاءة ديريكت خويا."
+            return "فعل إذن تعديل الإعدادات باش نتحكم في الإضاءة ديريكت خويا."
         }
         return try {
             Settings.System.putInt(

@@ -1,6 +1,8 @@
 package com.boykta.assistant.storage
 
 import android.content.Context
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -18,13 +20,22 @@ object ModelDownloader {
     private const val DARIJA_TN_URL =
         "https://alphacephei.com/vosk/models/vosk-model-small-ar-tn-0.1-linto.zip"
 
+    // Self-contained In-App Offline Male Arabic Neural Voice (Piper Kareem ~64MB)
+    private const val KAREEM_TTS_URL =
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ar_JO-kareem-low.tar.bz2"
+
     fun downloadAndExtractArabicModel(
         context: Context,
         packId: String = SdCardModelLocator.PACK_FUSHA_MGB2,
         onProgress: (Int, String) -> Unit,
         onComplete: (Boolean, String) -> Unit
     ) {
-        val downloadUrl = if (packId == SdCardModelLocator.PACK_DARIJA_TN) DARIJA_TN_URL else FUSHA_MGB2_URL
+        val isTarBz2 = packId == SdCardModelLocator.PACK_TTS_KAREEM
+        val downloadUrl = when (packId) {
+            SdCardModelLocator.PACK_TTS_KAREEM -> KAREEM_TTS_URL
+            SdCardModelLocator.PACK_DARIJA_TN -> DARIJA_TN_URL
+            else -> FUSHA_MGB2_URL
+        }
         val folderName = SdCardModelLocator.getFolderNameForPack(packId)
 
         Thread {
@@ -32,11 +43,12 @@ object ModelDownloader {
                 val baseDir = SdCardModelLocator.getPreferredStorageBaseDir(context)
                 val modelsRoot = File(baseDir, "models").apply { mkdirs() }
                 val targetDir = File(modelsRoot, folderName)
-                val zipFile = File(modelsRoot, "$packId-temp.zip")
+                val ext = if (isTarBz2) "tar.bz2" else "zip"
+                val archiveFile = File(modelsRoot, "$packId-temp.$ext")
 
                 val conn = (URL(downloadUrl).openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 15000
-                    readTimeout = 30000
+                    connectTimeout = 20000
+                    readTimeout = 45000
                     instanceFollowRedirects = true
                 }
                 conn.connect()
@@ -50,7 +62,7 @@ object ModelDownloader {
                 var downloadedBytes = 0L
 
                 BufferedInputStream(conn.inputStream).use { input ->
-                    FileOutputStream(zipFile).use { output ->
+                    FileOutputStream(archiveFile).use { output ->
                         val buf = ByteArray(16 * 1024)
                         var read: Int
                         while (input.read(buf).also { read = it } != -1) {
@@ -63,35 +75,78 @@ object ModelDownloader {
                     }
                 }
 
-                onProgress(80, "جاري فك ضغط النموذج على بطاقة الذاكرة...")
+                onProgress(80, "جاري فك ضغط الحزمة على بطاقة الذاكرة...")
                 if (targetDir.exists()) targetDir.deleteRecursively()
+                targetDir.mkdirs()
 
-                ZipInputStream(zipFile.inputStream().buffered()).use { zis ->
-                    var entry = zis.nextEntry
+                if (isTarBz2) {
+                    extractTarBz2(archiveFile, targetDir)
+                } else {
+                    extractZip(archiveFile, targetDir)
+                }
+
+                archiveFile.delete()
+                onProgress(100, "اكتمل التثبيت! بويكتا يعمل الآن 100% بدون إنترنت.")
+                onComplete(true, "تم التثبيت بنجاح في: ${targetDir.absolutePath}")
+            } catch (e: Exception) {
+                onComplete(false, "فشل التحميل: ${e.localizedMessage ?: "تأكد من الاتصال بالواي فاي"}")
+            }
+        }.start()
+    }
+
+    private fun extractZip(zipFile: File, targetDir: File) {
+        val canonicalTarget = targetDir.canonicalPath
+        ZipInputStream(zipFile.inputStream().buffered()).use { zis ->
+            var entry = zis.nextEntry
+            while (entry != null) {
+                val relPath = entry.name.substringAfter("/", "")
+                if (relPath.isNotEmpty()) {
+                    val outFile = File(targetDir, relPath)
+                    if (!outFile.canonicalPath.startsWith(canonicalTarget)) {
+                        throw SecurityException("Invalid zip entry path")
+                    }
+                    if (entry.isDirectory) {
+                        outFile.mkdirs()
+                    } else {
+                        outFile.parentFile?.mkdirs()
+                        FileOutputStream(outFile).use { fos ->
+                            zis.copyTo(fos)
+                        }
+                    }
+                }
+                zis.closeEntry()
+                entry = zis.nextEntry
+            }
+        }
+    }
+
+    private fun extractTarBz2(tarBz2File: File, targetDir: File) {
+        val canonicalTarget = targetDir.canonicalPath
+        BufferedInputStream(tarBz2File.inputStream()).use { bis ->
+            BZip2CompressorInputStream(bis, true).use { bzIn ->
+                TarArchiveInputStream(bzIn).use { tarIn ->
+                    var entry = tarIn.nextEntry
                     while (entry != null) {
-                        val relPath = entry.name.substringAfter("/", "")
+                        val rawName = entry.name.trimStart('.', '/')
+                        val relPath = rawName.substringAfter("/", "")
                         if (relPath.isNotEmpty()) {
                             val outFile = File(targetDir, relPath)
+                            if (!outFile.canonicalPath.startsWith(canonicalTarget)) {
+                                throw SecurityException("Invalid tar entry path")
+                            }
                             if (entry.isDirectory) {
                                 outFile.mkdirs()
                             } else {
                                 outFile.parentFile?.mkdirs()
                                 FileOutputStream(outFile).use { fos ->
-                                    zis.copyTo(fos)
+                                    tarIn.copyTo(fos)
                                 }
                             }
                         }
-                        zis.closeEntry()
-                        entry = zis.nextEntry
+                        entry = tarIn.nextEntry
                     }
                 }
-
-                zipFile.delete()
-                onProgress(100, "اكتمل التثبيت! بويكتا يعمل الآن 100% بدون إنترنت.")
-                onComplete(true, "تم تثبيت الحزمة في: ${targetDir.absolutePath}")
-            } catch (e: Exception) {
-                onComplete(false, "فشل التحميل: ${e.localizedMessage ?: "تأكد من الاتصال بالواي فاي"}")
             }
-        }.start()
+        }
     }
 }

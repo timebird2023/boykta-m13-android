@@ -6,7 +6,7 @@ import android.speech.tts.UtteranceProgressListener
 import java.util.Locale
 
 class MaleTtsManager(
-    context: Context,
+    private val context: Context,
     private val onReadyCallback: (() -> Unit)? = null,
     private val onSpeakingChanged: ((Boolean) -> Unit)? = null
 ) : TextToSpeech.OnInitListener {
@@ -15,14 +15,23 @@ class MaleTtsManager(
         const val STRICT_ARABIC_ONLY = true
     }
 
-    private var tts: TextToSpeech? = TextToSpeech(context.applicationContext, this)
-    private var ready = false
-    private var arabicAvailable = false
-    private val pendingQueue = mutableListOf<String>()
+    private val inAppEngine = InAppArabicTtsEngine(context.applicationContext)
+    private var sysTts: TextToSpeech? = TextToSpeech(context.applicationContext, this)
+    private var sysReady = false
+    private var sysArabicAvailable = false
+
+    init {
+        Thread {
+            if (inAppEngine.isInstalled()) {
+                inAppEngine.ensureInitialized()
+                onReadyCallback?.invoke()
+            }
+        }.start()
+    }
 
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
-            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            sysTts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {
                     onSpeakingChanged?.invoke(true)
                 }
@@ -37,22 +46,20 @@ class MaleTtsManager(
                 }
             })
             refreshArabicCheck()
-            ready = true
-            pendingQueue.forEach { speak(it) }
-            pendingQueue.clear()
+            sysReady = true
             onReadyCallback?.invoke()
         }
     }
 
     fun refreshArabicCheck() {
         val localeDz = Locale("ar", "DZ")
-        var res = tts?.setLanguage(localeDz) ?: TextToSpeech.LANG_NOT_SUPPORTED
+        var res = sysTts?.setLanguage(localeDz) ?: TextToSpeech.LANG_NOT_SUPPORTED
         if (res == TextToSpeech.LANG_MISSING_DATA || res == TextToSpeech.LANG_NOT_SUPPORTED) {
-            res = tts?.setLanguage(Locale("ar")) ?: TextToSpeech.LANG_NOT_SUPPORTED
+            res = sysTts?.setLanguage(Locale("ar")) ?: TextToSpeech.LANG_NOT_SUPPORTED
         }
 
-        val arabicVoices = tts?.voices?.filter { it.locale.language == "ar" } ?: emptyList()
-        arabicAvailable = arabicVoices.isNotEmpty() ||
+        val arabicVoices = sysTts?.voices?.filter { it.locale.language == "ar" } ?: emptyList()
+        sysArabicAvailable = arabicVoices.isNotEmpty() ||
             (res != TextToSpeech.LANG_MISSING_DATA && res != TextToSpeech.LANG_NOT_SUPPORTED)
 
         val maleVoice = arabicVoices.firstOrNull { v ->
@@ -62,13 +69,20 @@ class MaleTtsManager(
         } ?: arabicVoices.firstOrNull()
 
         if (maleVoice != null) {
-            tts?.voice = maleVoice
+            sysTts?.voice = maleVoice
         }
-        tts?.setPitch(0.84f)
-        tts?.setSpeechRate(0.95f)
+        sysTts?.setPitch(0.84f)
+        sysTts?.setSpeechRate(0.95f)
     }
 
-    fun isArabicReady(): Boolean = arabicAvailable
+    fun reloadInAppVoice() {
+        inAppEngine.reloadModel()
+        onReadyCallback?.invoke()
+    }
+
+    fun isInAppVoiceInstalled(): Boolean = inAppEngine.isInstalled()
+
+    fun isArabicReady(): Boolean = inAppEngine.isInstalled() || sysArabicAvailable
 
     private fun enforceArabicWords(input: String): String {
         return input
@@ -86,19 +100,41 @@ class MaleTtsManager(
 
     fun speak(text: String) {
         val cleanText = if (STRICT_ARABIC_ONLY) enforceArabicWords(text) else text
-        if (!ready) {
-            pendingQueue.add(cleanText)
+
+        // 1. Priority: Self-contained In-App Sherpa-ONNX Male Arabic Voice (Kareem)
+        if (inAppEngine.isInstalled()) {
+            inAppEngine.speakAsync(
+                arabicText = cleanText,
+                onStarted = { onSpeakingChanged?.invoke(true) },
+                onFinished = { onSpeakingChanged?.invoke(false) }
+            )
             return
         }
-        if (STRICT_ARABIC_ONLY && !arabicAvailable) {
+
+        // 2. Fallback: System Android TTS only if Arabic pack is installed on phone
+        if (sysReady && sysArabicAvailable) {
+            sysTts?.speak(
+                cleanText,
+                TextToSpeech.QUEUE_FLUSH,
+                null,
+                "boykta_${System.currentTimeMillis()}"
+            )
             return
         }
-        tts?.speak(cleanText, TextToSpeech.QUEUE_FLUSH, null, "boykta_${System.currentTimeMillis()}")
+
+        // 3. Never speak English! Play crisp confirmation chime while notifying UI to download Kareem 64MB
+        onSpeakingChanged?.invoke(true)
+        AudioChimes.playConfirmChime()
+        Thread {
+            Thread.sleep(220L)
+            onSpeakingChanged?.invoke(false)
+        }.start()
     }
 
     fun shutdown() {
-        tts?.stop()
-        tts?.shutdown()
-        tts = null
+        inAppEngine.shutdown()
+        sysTts?.stop()
+        sysTts?.shutdown()
+        sysTts = null
     }
 }

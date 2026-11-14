@@ -18,7 +18,9 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.BatteryManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.Settings
@@ -33,9 +35,12 @@ import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.boykta.assistant.R
+import com.boykta.assistant.audio.AudioChimes
 import com.boykta.assistant.audio.MaleTtsManager
 import com.boykta.assistant.nlu.DarijaIntentRouter
+import com.boykta.assistant.nlu.WakeWordMatcher
 import com.boykta.assistant.storage.SdCardModelLocator
+import com.boykta.assistant.ui.BoyktaRobotView
 import org.json.JSONObject
 import org.vosk.Model
 import org.vosk.Recognizer
@@ -63,14 +68,31 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
     private var bubbleStatusText: TextView? = null
     private var quickDrawer: LinearLayout? = null
 
+    private var wakeSheetView: View? = null
+    private var wakeSheetRobot: BoyktaRobotView? = null
+    private var wakeSheetStatus: TextView? = null
+    private var wakeSheetHeard: TextView? = null
+
+    private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var sensorManager: SensorManager
     private var proximitySensor: Sensor? = null
     private lateinit var ttsManager: MaleTtsManager
     private var wakeLock: PowerManager.WakeLock? = null
 
     private var voskModel: Model? = null
+    private var loadedModelPath: String? = null
     private var speechService: SpeechService? = null
 
+    @Volatile
+    private var isLoadingModel = false
+
+    @Volatile
+    private var isSpeakingNow = false
+
+    @Volatile
+    private var awakeCommandUntilMs = 0L
+
+    private var lastWakeChimeAtMs = 0L
     private var isScreenOn = true
     private var isCharging = false
     private var isInPocket = false
@@ -95,14 +117,27 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
     @SuppressLint("WakelockTimeout")
     override fun onCreate() {
         super.onCreate()
-        ttsManager = MaleTtsManager(this)
+        ttsManager = MaleTtsManager(
+            context = this,
+            onSpeakingChanged = { speaking ->
+                isSpeakingNow = speaking
+                try {
+                    speechService?.setPause(speaking)
+                } catch (_: Exception) {
+                }
+                mainHandler.post {
+                    wakeSheetRobot?.setMood(
+                        if (speaking) BoyktaRobotView.Mood.SPEAKING
+                        else if (System.currentTimeMillis() < awakeCommandUntilMs) BoyktaRobotView.Mood.LISTENING
+                        else BoyktaRobotView.Mood.IDLE
+                    )
+                }
+            }
+        )
         createNotificationChannel()
         startForeground(
             NOTIF_ID,
-            buildNotification(
-                if (ALWAYS_ON_24_7) "بويكتا شغال 24/24 ينتظر ندائك"
-                else "بويكتا جاهز في وضع توفير البطارية"
-            )
+            buildNotification("بويكتا يجهز مستشعر الصوت 24/24...")
         )
 
         val pm = getSystemService(POWER_SERVICE) as PowerManager
@@ -141,11 +176,26 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
             attachFloatingBubble()
         }
 
-        loadOfflineArabicModel()
+        loadOfflineArabicModel(forceReload = true)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        evaluateBatterySafeListeningGate()
+        when (intent?.action) {
+            BoyktaEvents.ACTION_RELOAD_MODELS -> {
+                ttsManager.reloadInAppVoice()
+                loadOfflineArabicModel(forceReload = true)
+            }
+            BoyktaEvents.ACTION_SIMULATE_WAKE -> {
+                triggerOkGoogleWakeUi("راني نسمع فيك خويا — قولي واش تحب!")
+            }
+            else -> {
+                if (voskModel == null) {
+                    loadOfflineArabicModel(forceReload = false)
+                } else {
+                    evaluateBatterySafeListeningGate()
+                }
+            }
+        }
         return START_STICKY
     }
 
@@ -164,18 +214,121 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
         super.onTaskRemoved(rootIntent)
     }
 
-    private fun loadOfflineArabicModel() {
+    private fun loadOfflineArabicModel(forceReload: Boolean) {
+        if (isLoadingModel) return
         Thread {
-            val dir: File? = SdCardModelLocator.findActiveVoskModelDir(this)
-            if (dir != null) {
-                try {
-                    voskModel = Model(dir.absolutePath)
-                    evaluateBatterySafeListeningGate()
-                } catch (_: Exception) {
-                    updateBubbleLabel("بويكتا")
+            isLoadingModel = true
+            try {
+                val dir: File? = SdCardModelLocator.findActiveVoskModelDir(this)
+                if (dir == null) {
+                    broadcastState(
+                        BoyktaEvents.TYPE_ERROR,
+                        "بانتظار تحميل حزمة الدارجة (158MB) أو الفصحى (318MB) على بطاقة الذاكرة."
+                    )
+                    updateNotification("بانتظار تحميل حزمة السمع العربية على SD")
+                    return@Thread
                 }
+
+                if (!forceReload && voskModel != null && loadedModelPath == dir.absolutePath) {
+                    evaluateBatterySafeListeningGate()
+                    return@Thread
+                }
+
+                broadcastState(BoyktaEvents.TYPE_STATUS, "جاري تحميل نموذج السمع على الذاكرة...")
+                stopRecognizerStream()
+                voskModel?.close()
+                voskModel = Model(dir.absolutePath)
+                loadedModelPath = dir.absolutePath
+                evaluateBatterySafeListeningGate()
+            } catch (e: Exception) {
+                broadcastState(
+                    BoyktaEvents.TYPE_ERROR,
+                    "تعذر تشغيل نموذج الصوت: ${e.localizedMessage ?: "أعد التحميل"}"
+                )
+            } finally {
+                isLoadingModel = false
             }
         }.start()
+    }
+
+    private fun triggerOkGoogleWakeUi(statusPrompt: String) {
+        val now = System.currentTimeMillis()
+        awakeCommandUntilMs = now + 8000L
+        manualTriggerActive = true
+        if (now - lastWakeChimeAtMs > 1200L) {
+            lastWakeChimeAtMs = now
+            AudioChimes.playWakeChime(this)
+        }
+        broadcastState(BoyktaEvents.TYPE_WAKE, statusPrompt)
+        showWakeOverlaySheet(statusPrompt, "في انتظار أمرك الصوتي...")
+        startRecognizerStream()
+        mainHandler.removeCallbacks(hideWakeSheetRunnable)
+        mainHandler.postDelayed(hideWakeSheetRunnable, 8500L)
+    }
+
+    private val hideWakeSheetRunnable = Runnable {
+        if (System.currentTimeMillis() >= awakeCommandUntilMs) {
+            manualTriggerActive = false
+            hideWakeOverlaySheet()
+        }
+    }
+
+    private fun showWakeOverlaySheet(status: String, heardText: String) {
+        if (!Settings.canDrawOverlays(this)) return
+        mainHandler.post {
+            try {
+                if (windowManager == null) {
+                    windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+                }
+                if (wakeSheetView == null) {
+                    val view = LayoutInflater.from(this).inflate(R.layout.overlay_wake_sheet, null)
+                    wakeSheetRobot = view.findViewById(R.id.wakeSheetRobot)
+                    wakeSheetStatus = view.findViewById(R.id.tvWakeSheetStatus)
+                    wakeSheetHeard = view.findViewById(R.id.tvWakeSheetHeard)
+                    view.findViewById<TextView>(R.id.btnWakeSheetClose).setOnClickListener {
+                        awakeCommandUntilMs = 0L
+                        manualTriggerActive = false
+                        hideWakeOverlaySheet()
+                    }
+                    val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                    } else {
+                        @Suppress("DEPRECATION")
+                        WindowManager.LayoutParams.TYPE_PHONE
+                    }
+                    val params = WindowManager.LayoutParams(
+                        WindowManager.LayoutParams.MATCH_PARENT,
+                        WindowManager.LayoutParams.WRAP_CONTENT,
+                        layoutType,
+                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                        PixelFormat.TRANSLUCENT
+                    ).apply {
+                        gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                        y = 32
+                    }
+                    windowManager?.addView(view, params)
+                    wakeSheetView = view
+                }
+                wakeSheetRobot?.setMood(BoyktaRobotView.Mood.LISTENING)
+                wakeSheetStatus?.text = status
+                wakeSheetHeard?.text = heardText
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun hideWakeOverlaySheet() {
+        mainHandler.post {
+            try {
+                wakeSheetView?.let { windowManager?.removeView(it) }
+            } catch (_: Exception) {
+            } finally {
+                wakeSheetView = null
+                wakeSheetRobot = null
+                wakeSheetStatus = null
+                wakeSheetHeard = null
+            }
+        }
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -267,21 +420,27 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
     }
 
     private fun onBubbleTapped() {
-        manualTriggerActive = true
         if (voskModel == null) {
             ttsManager.speak("أهلا خويا، افتح التطبيق وحمل حزمة الفصحى أو الدارجة على بطاقة الذاكرة باش نسمعك بلا انترنت.")
             quickDrawer?.visibility =
                 if (quickDrawer?.visibility == View.VISIBLE) View.GONE else View.VISIBLE
             return
         }
+        triggerOkGoogleWakeUi("راني نسمع فيك خويا...")
         ttsManager.speak("راني نسمع فيك خويا")
-        startRecognizerStream()
     }
 
     private fun evaluateBatterySafeListeningGate() {
+        if (voskModel == null) {
+            updateBubbleLabel("بلا حزمة")
+            return
+        }
+
         if (ALWAYS_ON_24_7) {
             startRecognizerStream()
             updateBubbleLabel("24/24")
+            updateNotification("الميكروفون نشط 24/24 — قل بويكتا الآن")
+            broadcastState(BoyktaEvents.TYPE_STATUS, "الميكروفون نشط 24/24 — قل «بويكتا» الآن!")
             return
         }
 
@@ -298,34 +457,73 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
         if (!lowBatteryStop && !pocketStop && allowedContext) {
             startRecognizerStream()
             updateBubbleLabel("بويكتا")
+            updateNotification("الميكروفون نشط — قل بويكتا")
+            broadcastState(BoyktaEvents.TYPE_STATUS, "الميكروفون نشط — قل «بويكتا»!")
         } else if (!manualTriggerActive) {
             stopRecognizerStream()
-            updateBubbleLabel(if (pocketStop) "في الجيب" else "نايم")
+            val label = if (pocketStop) "في الجيب" else "نايم"
+            updateBubbleLabel(label)
+            broadcastState(BoyktaEvents.TYPE_STATUS, "في وضع توفير البطارية ($label)")
         }
     }
 
     private fun startRecognizerStream() {
         val model = voskModel ?: return
-        if (speechService != null) return
+        if (speechService != null) {
+            try {
+                speechService?.setPause(isSpeakingNow)
+            } catch (_: Exception) {
+            }
+            return
+        }
         try {
             val recognizer = Recognizer(model, 16000.0f)
             speechService = SpeechService(recognizer, 16000.0f).also {
                 it.startListening(this)
+                if (isSpeakingNow) it.setPause(true)
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
             stopRecognizerStream()
+            broadcastState(
+                BoyktaEvents.TYPE_ERROR,
+                "تعذر فتح الميكروفون: ${e.localizedMessage ?: "تأكد من إذن التسجيل"}"
+            )
         }
     }
 
     private fun stopRecognizerStream() {
-        speechService?.stop()
-        speechService?.shutdown()
+        try {
+            speechService?.stop()
+            speechService?.shutdown()
+        } catch (_: Exception) {
+        }
         speechService = null
     }
 
-    override fun onPartialResult(hypothesis: String?) {}
+    override fun onPartialResult(hypothesis: String?) {
+        if (isSpeakingNow) return
+        val json = hypothesis ?: return
+        val partial = try {
+            JSONObject(json).optString("partial", "").trim()
+        } catch (_: Exception) {
+            ""
+        }
+        if (partial.isEmpty()) return
+
+        broadcastState(BoyktaEvents.TYPE_PARTIAL, partial)
+        mainHandler.post {
+            wakeSheetHeard?.text = "سمعت: «$partial»"
+        }
+
+        if (System.currentTimeMillis() > awakeCommandUntilMs &&
+            WakeWordMatcher.containsWakeWord(partial, WAKE_WORD)
+        ) {
+            triggerOkGoogleWakeUi("سمعتك خويا! كمل طلبك...")
+        }
+    }
 
     override fun onResult(hypothesis: String?) {
+        if (isSpeakingNow) return
         val json = hypothesis ?: return
         val text = try {
             JSONObject(json).optString("text", "").trim()
@@ -334,17 +532,45 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
         }
         if (text.isEmpty()) return
 
-        val containsWake = text.contains(WAKE_WORD) ||
-            text.contains("بوكتا") ||
-            text.contains("بويكتة") ||
-            manualTriggerActive
+        broadcastState(BoyktaEvents.TYPE_PARTIAL, text)
 
-        if (containsWake) {
-            manualTriggerActive = false
-            val reply = DarijaIntentRouter.executeCommand(this, text)
-            ttsManager.speak(reply)
-            evaluateBatterySafeListeningGate()
+        val now = System.currentTimeMillis()
+        val isAwakeWindow = now <= awakeCommandUntilMs
+        val hasWakeWord = WakeWordMatcher.containsWakeWord(text, WAKE_WORD)
+
+        if (!hasWakeWord && !isAwakeWindow && !manualTriggerActive) {
+            return
         }
+
+        val commandOnly = WakeWordMatcher.stripWakeWord(text, WAKE_WORD)
+
+        // If user ONLY said "بويكتا" (like "OK Google"), chime + stay open for the next command!
+        if (commandOnly.isEmpty() && !isAwakeWindow) {
+            triggerOkGoogleWakeUi("نعم خويا؟ راني نسمع فيك...")
+            ttsManager.speak("نعم خويا؟")
+            return
+        }
+
+        if (commandOnly.isEmpty()) {
+            return
+        }
+
+        awakeCommandUntilMs = 0L
+        manualTriggerActive = false
+        mainHandler.removeCallbacks(hideWakeSheetRunnable)
+
+        val reply = DarijaIntentRouter.executeCommand(this, commandOnly)
+        broadcastState(BoyktaEvents.TYPE_COMMAND, text, reply)
+
+        mainHandler.post {
+            wakeSheetRobot?.setMood(BoyktaRobotView.Mood.HAPPY)
+            wakeSheetStatus?.text = "تم التنفيذ خويا!"
+            wakeSheetHeard?.text = reply
+        }
+        mainHandler.postDelayed({ hideWakeOverlaySheet() }, 2200L)
+
+        ttsManager.speak(reply)
+        evaluateBatterySafeListeningGate()
     }
 
     override fun onFinalResult(hypothesis: String?) {
@@ -353,13 +579,15 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
 
     override fun onError(exception: Exception?) {
         stopRecognizerStream()
-        if (ALWAYS_ON_24_7) {
-            startRecognizerStream()
+        if (ALWAYS_ON_24_7 && voskModel != null) {
+            mainHandler.postDelayed({ startRecognizerStream() }, 500L)
         }
     }
 
     override fun onTimeout() {
         manualTriggerActive = false
+        awakeCommandUntilMs = 0L
+        hideWakeOverlaySheet()
         evaluateBatterySafeListeningGate()
     }
 
@@ -375,6 +603,24 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
 
     private fun updateBubbleLabel(label: String) {
         bubbleStatusText?.post { bubbleStatusText?.text = label }
+    }
+
+    private fun updateNotification(text: String) {
+        try {
+            val nm = getSystemService(NotificationManager::class.java)
+            nm.notify(NOTIF_ID, buildNotification(text))
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun broadcastState(type: String, text: String, reply: String = "") {
+        val intent = Intent(BoyktaEvents.ACTION_STATE_UPDATE).apply {
+            setPackage(packageName)
+            putExtra(BoyktaEvents.EXTRA_TYPE, type)
+            putExtra(BoyktaEvents.EXTRA_TEXT, text)
+            putExtra(BoyktaEvents.EXTRA_REPLY, reply)
+        }
+        sendBroadcast(intent)
     }
 
     private fun createNotificationChannel() {
@@ -401,9 +647,13 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        hideWakeOverlaySheet()
         stopRecognizerStream()
         voskModel?.close()
-        unregisterReceiver(contextReceiver)
+        try {
+            unregisterReceiver(contextReceiver)
+        } catch (_: Exception) {
+        }
         sensorManager.unregisterListener(this)
         if (wakeLock?.isHeld == true) {
             wakeLock?.release()
