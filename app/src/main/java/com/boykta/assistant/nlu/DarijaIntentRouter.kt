@@ -291,6 +291,23 @@ object DarijaIntentRouter {
             .replace('آ', 'ا')
             .replace('ة', 'ه')
             .replace('ى', 'ي')
+            .replace("فيس بوك", "فيسبوك")
+            .replace("الفيس بوك", "فيسبوك")
+            .replace("فريفاير", "فري فاير")
+            .replace("فري فاي", "فري فاير")
+            .replace("في فاير", "فري فاير")
+            .replace("فلي فاير", "فري فاير")
+            .replace("لكاميرا", "الكاميرا")
+            .replace("كميرا", "الكاميرا")
+            .replace("الباطري", "الباتري")
+            .replace("باطري", "باتري")
+            .replace("شعال", "شحال")
+            .replace("شحل", "شحال")
+            .replace("نطف", "نضف")
+            .replace("نظف", "نضف")
+            .replace("واتس اب", "واتساب")
+            .replace("واشساب", "واتساب")
+            .replace("مسينجر", "مسنجر")
             .replace(Regex("\\s+"), " ")
             .lowercase(Locale.ROOT)
     }
@@ -306,10 +323,32 @@ object DarijaIntentRouter {
             .trim()
     }
 
+    private fun tokenMatchesFuzzy(cleanedWords: List<String>, token: String): Boolean {
+        if (cleanedWords.any { it == token || it.contains(token) || token.contains(it) }) return true
+        if (token.length < 4) return false
+        return cleanedWords.any { w -> w.length >= 4 && levenshteinDist(w, token) <= 1 }
+    }
+
+    private fun levenshteinDist(a: String, b: String): Int {
+        val m = a.length
+        val n = b.length
+        val dp = IntArray(n + 1) { it }
+        for (i in 1..m) {
+            var prev = dp[0]
+            dp[0] = i
+            for (j in 1..n) {
+                val temp = dp[j]
+                dp[j] = if (a[i - 1] == b[j - 1]) prev else 1 + minOf(prev, dp[j], dp[j - 1])
+                prev = temp
+            }
+        }
+        return dp[n]
+    }
+
     fun executeCommand(context: Context, rawUtterance: String): String {
         val norm = normalizeArabic(rawUtterance)
         val hasLaughter = Regex("(ههه|هاها|خهه)").containsMatchIn(norm)
-        val withoutWake = WakeWordMatcher.stripWakeWord(norm, "بويكتا")
+        val withoutWake = WakeWordMatcher.stripWakeWord(norm, "بويكتا", context)
         val cleaned = stripNoiseAndChatter(withoutWake)
 
         if (cleaned.isEmpty()) {
@@ -373,6 +412,7 @@ object DarijaIntentRouter {
             return "شكون حبيت نعيطلو خويا؟ ما لقيتش هاد الاسم في جهات الاتصال."
         }
 
+        val cleanedWords = cleaned.split(" ").filter { it.isNotBlank() }
         var bestRule: CommandRule? = null
         var bestScore = 0
         for (rule in rules) {
@@ -387,9 +427,9 @@ object DarijaIntentRouter {
                     }
                 } else {
                     val tokens = trigNorm.split(" ").filter { it.length > 1 }
-                    val hits = tokens.count { cleaned.contains(it) }
-                    if (tokens.isNotEmpty() && hits * 100 / tokens.size >= 65) {
-                        val score = (hits * 60) / tokens.size
+                    val hits = tokens.count { tok -> tokenMatchesFuzzy(cleanedWords, tok) }
+                    if (tokens.isNotEmpty() && hits * 100 / tokens.size >= 60) {
+                        val score = (hits * 70) / tokens.size
                         if (score > bestScore) {
                             bestScore = score
                             bestRule = rule
@@ -403,7 +443,15 @@ object DarijaIntentRouter {
         }
 
         val openVerbs = listOf("افتح", "حل", "شعل", "ديرلي", "ادخل", "روح")
-        if (openVerbs.any { cleaned.contains(it) }) {
+        val mentionsAppOrHardware =
+            arabicToPackageHints.keys.any { cleaned.contains(normalizeArabic(it)) } ||
+                cleaned.contains("كاميرا") ||
+                cleaned.contains("بيانات") ||
+                cleaned.contains("ويفي") ||
+                cleaned.contains("واي فاي") ||
+                cleaned.contains("بلوتوث")
+
+        if (openVerbs.any { cleaned.contains(it) } || mentionsAppOrHardware) {
             if (cleaned.contains("كاميرا") || cleaned.contains("لكاميرا")) {
                 return openCamera(context)
             }

@@ -11,8 +11,8 @@ android {
         applicationId = "com.boykta.assistant"
         minSdk = 26
         targetSdk = 34
-        versionCode = 5
-        versionName = "3.0.0-m13"
+        versionCode = 6
+        versionName = "3.1.0-m13"
 
         ndk {
             abiFilters += listOf("armeabi-v7a")

@@ -15,15 +15,20 @@ class MaleTtsManager(
         const val STRICT_ARABIC_ONLY = true
     }
 
-    private val inAppEngine = InAppArabicTtsEngine(context.applicationContext)
-    private var sysTts: TextToSpeech? = TextToSpeech(context.applicationContext, this)
+    private val appContext = context.applicationContext
+    private var sysTts: TextToSpeech? = TextToSpeech(appContext, this)
     private var sysReady = false
     private var sysArabicAvailable = false
 
+    private val speakingListener: (Boolean) -> Unit = { speaking ->
+        onSpeakingChanged?.invoke(speaking)
+    }
+
     init {
+        InAppArabicTtsEngine.addSpeakingListener(speakingListener)
         Thread {
-            if (inAppEngine.isInstalled()) {
-                inAppEngine.ensureInitialized()
+            if (InAppArabicTtsEngine.isInstalled(appContext)) {
+                InAppArabicTtsEngine.ensureInitialized(appContext)
                 onReadyCallback?.invoke()
             }
         }.start()
@@ -76,13 +81,13 @@ class MaleTtsManager(
     }
 
     fun reloadInAppVoice() {
-        inAppEngine.reloadModel()
+        InAppArabicTtsEngine.reloadModel(appContext)
         onReadyCallback?.invoke()
     }
 
-    fun isInAppVoiceInstalled(): Boolean = inAppEngine.isInstalled()
+    fun isInAppVoiceInstalled(): Boolean = InAppArabicTtsEngine.isInstalled(appContext)
 
-    fun isArabicReady(): Boolean = inAppEngine.isInstalled() || sysArabicAvailable
+    fun isArabicReady(): Boolean = InAppArabicTtsEngine.isInstalled(appContext) || sysArabicAvailable
 
     private fun enforceArabicWords(input: String): String {
         return input
@@ -101,12 +106,11 @@ class MaleTtsManager(
     fun speak(text: String) {
         val cleanText = if (STRICT_ARABIC_ONLY) enforceArabicWords(text) else text
 
-        // 1. Priority: Self-contained In-App Sherpa-ONNX Male Arabic Voice (Kareem)
-        if (inAppEngine.isInstalled()) {
-            inAppEngine.speakAsync(
-                arabicText = cleanText,
-                onStarted = { onSpeakingChanged?.invoke(true) },
-                onFinished = { onSpeakingChanged?.invoke(false) }
+        // 1. Priority: Self-contained In-App Sherpa-ONNX Male Arabic Voice (Kareem Singleton)
+        if (InAppArabicTtsEngine.isInstalled(appContext)) {
+            InAppArabicTtsEngine.speakAsync(
+                context = appContext,
+                arabicText = cleanText
             )
             return
         }
@@ -132,7 +136,7 @@ class MaleTtsManager(
     }
 
     fun shutdown() {
-        inAppEngine.shutdown()
+        InAppArabicTtsEngine.removeSpeakingListener(speakingListener)
         sysTts?.stop()
         sysTts?.shutdown()
         sysTts = null

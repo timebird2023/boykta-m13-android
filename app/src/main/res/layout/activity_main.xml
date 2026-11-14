@@ -86,6 +86,16 @@
         </LinearLayout>
 
         <Button
+            android:id="@+id/btnTeachWakeWord"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:backgroundTint="#0284C7"
+            android:text="🎯 علّمني نطقي لكلمة بويكتا (اضغط وقل «بويكتا» الآن)"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold" />
+
+        <Button
             android:id="@+id/btnDownloadKareemVoice"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -169,6 +179,16 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
             android:text="تفعيل نافذة بويكتا المنبثقة فوق التطبيقات (مثل OK Google)"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/btnStoragePermission"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:backgroundTint="#1E293B"
+            android:text="💾 حفظ الحزم بشكل دائم (/BoyktaModels) حتى لا تعيد التحميل"
+            android:textColor="#FDE68A"
             android:textSize="12sp" />
 
         <TextView

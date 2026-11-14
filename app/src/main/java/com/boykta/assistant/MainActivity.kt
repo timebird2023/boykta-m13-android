@@ -24,6 +24,7 @@ import androidx.core.content.ContextCompat
 import com.boykta.assistant.audio.AudioChimes
 import com.boykta.assistant.audio.MaleTtsManager
 import com.boykta.assistant.nlu.CustomRuleStore
+import com.boykta.assistant.nlu.CustomWakeStore
 import com.boykta.assistant.nlu.DarijaIntentRouter
 import com.boykta.assistant.service.BoyktaAccessibilityService
 import com.boykta.assistant.service.BoyktaBackgroundService
@@ -47,6 +48,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnDownloadKareemVoice: Button
     private lateinit var btnDownloadFusha: Button
     private lateinit var btnDownloadDarija: Button
+    private lateinit var btnTeachWakeWord: Button
+    private lateinit var btnStoragePermission: Button
     private lateinit var ttsManager: MaleTtsManager
 
     private val conversationHistory = StringBuilder()
@@ -80,6 +83,12 @@ class MainActivity : AppCompatActivity() {
                     tvLiveMic.text = "تم التقاط نداء بويكتا! راني نسمع فيك خويا..."
                     appendLog("النظام", "سمعت كلمة بويكتا — راني واجد لأمرك.")
                 }
+                BoyktaEvents.TYPE_LEARNED_WAKE -> {
+                    robotView.setMood(BoyktaRobotView.Mood.HAPPY)
+                    tvLiveMic.text = "تم حفظ نطقك لكلمة بويكتا: «$text» ✓"
+                    appendLog("النظام", "تم تدريب بويكتا على نطقك الشخصي: «$text» — سيستجيب فوراً الآن.")
+                    updateStatusUi()
+                }
                 BoyktaEvents.TYPE_COMMAND -> {
                     if (text.isNotEmpty()) appendLog("أنت (بالصوت)", text)
                     if (reply.isNotEmpty()) appendLog("بويكتا", reply)
@@ -111,6 +120,8 @@ class MainActivity : AppCompatActivity() {
         btnDownloadKareemVoice = findViewById(R.id.btnDownloadKareemVoice)
         btnDownloadFusha = findViewById(R.id.btnDownloadFusha)
         btnDownloadDarija = findViewById(R.id.btnDownloadDarija)
+        btnTeachWakeWord = findViewById(R.id.btnTeachWakeWord)
+        btnStoragePermission = findViewById(R.id.btnStoragePermission)
 
         ttsManager = MaleTtsManager(
             context = this,
@@ -166,6 +177,32 @@ class MainActivity : AppCompatActivity() {
                 )
             } else {
                 appendLog("النظام", "إذن النافذة المنبثقة فوق التطبيقات مفعل بالفعل.")
+            }
+        }
+
+        btnStoragePermission.setOnClickListener {
+            requestPersistentStorageAccess()
+        }
+
+        btnTeachWakeWord.setOnClickListener {
+            if (ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.RECORD_AUDIO
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                appendLog("النظام", "اقبل إذن الميكروفون أولاً لتعليم بويكتا صوتك.")
+                requestRequiredPermissions()
+                return@setOnClickListener
+            }
+            robotView.setMood(BoyktaRobotView.Mood.LISTENING)
+            tvLiveMic.text = "🎯 قل كلمة «بويكتا» بصوتك الطبيعي الآن حتى أحفظ نطقك للأبد..."
+            val teachIntent = Intent(this, BoyktaBackgroundService::class.java).apply {
+                action = BoyktaEvents.ACTION_TEACH_WAKE_START
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(teachIntent)
+            } else {
+                startService(teachIntent)
             }
         }
 
@@ -227,7 +264,7 @@ class MainActivity : AppCompatActivity() {
             } else {
                 startService(wakeIntent)
             }
-            appendLog("النظام", "تم فتح نافذة الاستماع السريع (OK Google style) لمدة 8 ثوانٍ.")
+            appendLog("النظام", "تم فتح نافذة الاستماع السريع (OK Google style) لمدة 10 ثوانٍ.")
         }
 
         findViewById<Button>(R.id.btnSaveCustomRule).setOnClickListener {
@@ -242,7 +279,42 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        migrateModelsIfPermitted()
         updateStatusUi()
+    }
+
+    private fun requestPersistentStorageAccess() {
+        if (SdCardModelLocator.hasAllFilesPermission(this)) {
+            migrateModelsIfPermitted()
+            appendLog("النظام", "مجلد الحفظ الدائم (/BoyktaModels) مفعل بالفعل — لن تفقد الحزم أبداً عند التحديث.")
+            updateStatusUi()
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+                )
+            } catch (_: Exception) {
+                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            }
+        }
+    }
+
+    private fun migrateModelsIfPermitted() {
+        if (!SdCardModelLocator.hasAllFilesPermission(this)) return
+        Thread {
+            val copied = SdCardModelLocator.migrateAppPrivateModelsToPersistentStorage(this)
+            if (copied > 0) {
+                runOnUiThread {
+                    appendLog("النظام", "تم نسخ $copied حزمة إلى المجلد الدائم /BoyktaModels لحمايتها من المسح.")
+                    updateStatusUi()
+                }
+            }
+        }.start()
     }
 
     private fun executeAndSpeak(utterance: String) {
@@ -275,7 +347,7 @@ class MainActivity : AppCompatActivity() {
             SdCardModelLocator.PACK_FUSHA_MGB2 -> "حزمة السمع الفصحى الدقيقة (318MB)"
             else -> "حزمة السمع الدارجة الجزائرية/المغاربية (158MB)"
         }
-        tvDownloadStatus.text = "جاري تحميل $packLabel إلى بطاقة التخزين 8GB..."
+        tvDownloadStatus.text = "جاري تحميل $packLabel إلى الذاكرة الدائمة..."
 
         ModelDownloader.downloadAndExtractArabicModel(
             context = this,
@@ -332,6 +404,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         ttsManager.refreshArabicCheck()
+        migrateModelsIfPermitted()
         updateStatusUi()
     }
 
@@ -410,9 +483,11 @@ class MainActivity : AppCompatActivity() {
         val accOk = BoyktaAccessibilityService.isConnected()
         val writeOk = Settings.System.canWrite(this)
         val overlayOk = Settings.canDrawOverlays(this)
+        val persistentOk = SdCardModelLocator.hasAllFilesPermission(this)
         val fushaReady = SdCardModelLocator.isPackInstalled(this, SdCardModelLocator.PACK_FUSHA_MGB2)
         val darijaReady = SdCardModelLocator.isPackInstalled(this, SdCardModelLocator.PACK_DARIJA_TN)
         val kareemReady = SdCardModelLocator.isKareemTtsInstalled(this)
+        val customWakeCount = CustomWakeStore.getPhrases(this).size
 
         val bm = getSystemService(BATTERY_SERVICE) as BatteryManager
         val batteryPct = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
@@ -431,11 +506,23 @@ class MainActivity : AppCompatActivity() {
             "تحميل صوت بويكتا العربي الذكوري المدمج (64MB) — يتكلم بلا هاتف"
         }
 
+        btnStoragePermission.text = if (persistentOk) {
+            "✓ الحفظ الدائم مفعّل (/BoyktaModels) — محمية من المسح"
+        } else {
+            "💾 حفظ الحزم بشكل دائم (/BoyktaModels) حتى لا تعيد التحميل"
+        }
+
+        btnTeachWakeWord.text = if (customWakeCount > 0) {
+            "🎯 علّمني نطقي لكلمة بويكتا (محفوظ $customWakeCount نطق لصوتك)"
+        } else {
+            "🎯 علّمني نطقي لكلمة بويكتا (اضغط وقل «بويكتا» الآن)"
+        }
+
         tvStatus.text = buildString {
             appendLine("حالة Galaxy M13 (armeabi-v7a) — الشحن: $batteryPct% · الرام الحرة: ${freeRamMb}MB")
             appendLine("• الفم (صوت بويكتا العربي المدمج Kareem): ${if (kareemReady) "مثبت ويعمل أوفلاين" else if (arabicTtsReady) "يعمل بصوت النظام" else "غير محمل (اضغط زر التحميل الأخضر)"}")
-            appendLine("• الأذن (الفهم 24/24): الفصحى ${if (fushaReady) "✓" else "✗"} · الدارجة ${if (darijaReady) "✓" else "✗"}")
-            appendLine("• المايك: ${if (micOk) "✓" else "✗"} · التحكم الشامل: ${if (accOk) "✓" else "✗"} · النافذة المنبثقة: ${if (overlayOk) "✓" else "✗"}")
+            appendLine("• الأذن (الفهم 24/24): الفصحى ${if (fushaReady) "✓" else "✗"} · الدارجة ${if (darijaReady) "✓" else "✗"} · نطقك الخاص: $customWakeCount")
+            appendLine("• المايك: ${if (micOk) "✓" else "✗"} · التحكم الشامل: ${if (accOk) "✓" else "✗"} · النافذة: ${if (overlayOk) "✓" else "✗"} · الحفظ الدائم: ${if (persistentOk) "✓" else "✗"}")
             append("• السطوع: ${if (writeOk) "✓" else "✗"} · جهات الاتصال: ${if (contactsOk) "✓" else "✗"}")
         }
     }

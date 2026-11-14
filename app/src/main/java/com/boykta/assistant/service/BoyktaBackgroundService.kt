@@ -37,6 +37,7 @@ import androidx.core.content.ContextCompat
 import com.boykta.assistant.R
 import com.boykta.assistant.audio.AudioChimes
 import com.boykta.assistant.audio.MaleTtsManager
+import com.boykta.assistant.nlu.CustomWakeStore
 import com.boykta.assistant.nlu.DarijaIntentRouter
 import com.boykta.assistant.nlu.WakeWordMatcher
 import com.boykta.assistant.storage.SdCardModelLocator
@@ -91,6 +92,12 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
 
     @Volatile
     private var awakeCommandUntilMs = 0L
+
+    @Volatile
+    private var isTeachingWakeMode = false
+
+    @Volatile
+    private var teachWakeExpiresAtMs = 0L
 
     private var lastWakeChimeAtMs = 0L
     private var isScreenOn = true
@@ -186,7 +193,20 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
                 loadOfflineArabicModel(forceReload = true)
             }
             BoyktaEvents.ACTION_SIMULATE_WAKE -> {
+                isTeachingWakeMode = false
                 triggerOkGoogleWakeUi("راني نسمع فيك خويا — قولي واش تحب!")
+            }
+            BoyktaEvents.ACTION_TEACH_WAKE_START -> {
+                isTeachingWakeMode = true
+                teachWakeExpiresAtMs = System.currentTimeMillis() + 9000L
+                manualTriggerActive = true
+                isSpeakingNow = false
+                AudioChimes.playWakeChime(this)
+                broadcastState(BoyktaEvents.TYPE_STATUS, "قل كلمة «بويكتا» بصوتك الطبيعي الآن للحفظ...")
+                showWakeOverlaySheet("تدريب كلمة بويكتا 🎯", "انطق «بويكتا» الآن...")
+                startRecognizerStream()
+                mainHandler.removeCallbacks(hideWakeSheetRunnable)
+                mainHandler.postDelayed(hideWakeSheetRunnable, 9500L)
             }
             else -> {
                 if (voskModel == null) {
@@ -253,9 +273,9 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
 
     private fun triggerOkGoogleWakeUi(statusPrompt: String) {
         val now = System.currentTimeMillis()
-        awakeCommandUntilMs = now + 8000L
+        awakeCommandUntilMs = now + 10000L
         manualTriggerActive = true
-        if (now - lastWakeChimeAtMs > 1200L) {
+        if (now - lastWakeChimeAtMs > 1100L) {
             lastWakeChimeAtMs = now
             AudioChimes.playWakeChime(this)
         }
@@ -263,11 +283,14 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
         showWakeOverlaySheet(statusPrompt, "في انتظار أمرك الصوتي...")
         startRecognizerStream()
         mainHandler.removeCallbacks(hideWakeSheetRunnable)
-        mainHandler.postDelayed(hideWakeSheetRunnable, 8500L)
+        mainHandler.postDelayed(hideWakeSheetRunnable, 10500L)
     }
 
     private val hideWakeSheetRunnable = Runnable {
-        if (System.currentTimeMillis() >= awakeCommandUntilMs) {
+        if (System.currentTimeMillis() >= teachWakeExpiresAtMs) {
+            isTeachingWakeMode = false
+        }
+        if (System.currentTimeMillis() >= awakeCommandUntilMs && !isTeachingWakeMode) {
             manualTriggerActive = false
             hideWakeOverlaySheet()
         }
@@ -515,8 +538,12 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
             wakeSheetHeard?.text = "سمعت: «$partial»"
         }
 
+        if (isTeachingWakeMode && System.currentTimeMillis() <= teachWakeExpiresAtMs) {
+            return
+        }
+
         if (System.currentTimeMillis() > awakeCommandUntilMs &&
-            WakeWordMatcher.containsWakeWord(partial, WAKE_WORD)
+            WakeWordMatcher.containsWakeWord(partial, WAKE_WORD, this)
         ) {
             triggerOkGoogleWakeUi("سمعتك خويا! كمل طلبك...")
         }
@@ -535,19 +562,35 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
         broadcastState(BoyktaEvents.TYPE_PARTIAL, text)
 
         val now = System.currentTimeMillis()
+        if (isTeachingWakeMode && now <= teachWakeExpiresAtMs) {
+            isTeachingWakeMode = false
+            manualTriggerActive = false
+            mainHandler.removeCallbacks(hideWakeSheetRunnable)
+            val saved = CustomWakeStore.addPhrase(this, text)
+            val displaySaved = saved.ifEmpty { text }
+            broadcastState(BoyktaEvents.TYPE_LEARNED_WAKE, displaySaved)
+            mainHandler.post {
+                wakeSheetRobot?.setMood(BoyktaRobotView.Mood.HAPPY)
+                wakeSheetStatus?.text = "تم حفظ نطقك!"
+                wakeSheetHeard?.text = displaySaved
+            }
+            mainHandler.postDelayed({ hideWakeOverlaySheet() }, 2000L)
+            ttsManager.speak("تم خويا، حفظت نطقك لكلمة بويكتا، غير تعيطلي دروك نستجيبلك فوراً.")
+            return
+        }
+
         val isAwakeWindow = now <= awakeCommandUntilMs
-        val hasWakeWord = WakeWordMatcher.containsWakeWord(text, WAKE_WORD)
+        val hasWakeWord = WakeWordMatcher.containsWakeWord(text, WAKE_WORD, this)
 
         if (!hasWakeWord && !isAwakeWindow && !manualTriggerActive) {
             return
         }
 
-        val commandOnly = WakeWordMatcher.stripWakeWord(text, WAKE_WORD)
+        val commandOnly = WakeWordMatcher.stripWakeWord(text, WAKE_WORD, this)
 
-        // If user ONLY said "بويكتا" (like "OK Google"), chime + stay open for the next command!
+        // If user ONLY said wake word, play short chime + keep mic 100% unpaused so follow-up command is never swallowed!
         if (commandOnly.isEmpty() && !isAwakeWindow) {
-            triggerOkGoogleWakeUi("نعم خويا؟ راني نسمع فيك...")
-            ttsManager.speak("نعم خويا؟")
+            triggerOkGoogleWakeUi("نعم خويا؟ قولي أمرك الآن...")
             return
         }
 
