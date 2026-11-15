@@ -3,4 +3,5 @@
     <string name="app_name">بويكتا M13</string>
     <string name="accessibility_service_label">بويكتا — التحكم الشامل بالهاتف</string>
     <string name="accessibility_service_description">يسمح لبويكتا بالوصول لكل شاشات الهاتف وتنفيذ الرجوع والرئيسية والإشعارات وتصوير الشاشة والضغط على الأزرار صوتياً.</string>
+    <string name="notif_listener_label">بويكتا — مراقب الرسائل غير المقروءة</string>
 </resources>

@@ -23,15 +23,22 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.boykta.assistant.audio.AudioChimes
 import com.boykta.assistant.audio.MaleTtsManager
+import com.boykta.assistant.nlu.BoyktaReminderStore
+import com.boykta.assistant.nlu.BoyktaUserProfileStore
 import com.boykta.assistant.nlu.CustomRuleStore
 import com.boykta.assistant.nlu.CustomWakeStore
 import com.boykta.assistant.nlu.DarijaIntentRouter
 import com.boykta.assistant.service.BoyktaAccessibilityService
 import com.boykta.assistant.service.BoyktaBackgroundService
 import com.boykta.assistant.service.BoyktaEvents
+import com.boykta.assistant.service.BoyktaNotificationListener
 import com.boykta.assistant.storage.ModelDownloader
 import com.boykta.assistant.storage.SdCardModelLocator
 import com.boykta.assistant.ui.BoyktaRobotView
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
@@ -41,8 +48,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvTtsWarning: TextView
     private lateinit var tvLog: TextView
     private lateinit var tvDownloadStatus: TextView
+    private lateinit var tvRemindersList: TextView
     private lateinit var progressDownload: ProgressBar
     private lateinit var etCommandTest: EditText
+    private lateinit var etUserName: EditText
+    private lateinit var etReminderText: EditText
+    private lateinit var etReminderTime: EditText
     private lateinit var etCustomTrigger: EditText
     private lateinit var etCustomReply: EditText
     private lateinit var btnDownloadMiroVoice: Button
@@ -52,6 +63,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnDownloadDarija: Button
     private lateinit var btnTeachWakeWord: Button
     private lateinit var btnStoragePermission: Button
+    private lateinit var btnNotifListenerPermission: Button
+    private lateinit var btnToggleIdleRadioGuard: Button
     private lateinit var ttsManager: MaleTtsManager
 
     private val conversationHistory = StringBuilder()
@@ -115,8 +128,12 @@ class MainActivity : AppCompatActivity() {
         tvTtsWarning = findViewById(R.id.tvTtsWarning)
         tvLog = findViewById(R.id.tvLog)
         tvDownloadStatus = findViewById(R.id.tvDownloadStatus)
+        tvRemindersList = findViewById(R.id.tvRemindersList)
         progressDownload = findViewById(R.id.progressDownload)
         etCommandTest = findViewById(R.id.etCommandTest)
+        etUserName = findViewById(R.id.etUserName)
+        etReminderText = findViewById(R.id.etReminderText)
+        etReminderTime = findViewById(R.id.etReminderTime)
         etCustomTrigger = findViewById(R.id.etCustomTrigger)
         etCustomReply = findViewById(R.id.etCustomReply)
         btnDownloadMiroVoice = findViewById(R.id.btnDownloadMiroVoice)
@@ -126,6 +143,13 @@ class MainActivity : AppCompatActivity() {
         btnDownloadDarija = findViewById(R.id.btnDownloadDarija)
         btnTeachWakeWord = findViewById(R.id.btnTeachWakeWord)
         btnStoragePermission = findViewById(R.id.btnStoragePermission)
+        btnNotifListenerPermission = findViewById(R.id.btnNotifListenerPermission)
+        btnToggleIdleRadioGuard = findViewById(R.id.btnToggleIdleRadioGuard)
+
+        val savedName = BoyktaUserProfileStore.getUserName(this)
+        if (savedName.isNotEmpty()) {
+            etUserName.setText(savedName)
+        }
 
         ttsManager = MaleTtsManager(
             context = this,
@@ -146,7 +170,15 @@ class MainActivity : AppCompatActivity() {
 
         robotView.setOnClickListener {
             robotView.setMood(BoyktaRobotView.Mood.HAPPY)
-            val greet = "أهلاً بك، أنا بويكتا. أخبرني بما تريد تنفيذه في الهاتف."
+            val sal = BoyktaUserProfileStore.salutation(this)
+            val greet = BoyktaUserProfileStore.pickVaried(
+                "robot_tap",
+                listOf(
+                    "أهلاً $sal، أنا مستعد لتنفيذ أي أمر في الهاتف.",
+                    "مرحباً $sal، أخبرني بما تحتاج إليه الآن.",
+                    "نعم $sal، بويكتا معك في أي لحظة."
+                )
+            )
             appendLog("بويكتا", greet)
             ttsManager.speak(greet)
         }
@@ -186,6 +218,63 @@ class MainActivity : AppCompatActivity() {
 
         btnStoragePermission.setOnClickListener {
             requestPersistentStorageAccess()
+        }
+
+        btnNotifListenerPermission.setOnClickListener {
+            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        }
+
+        btnToggleIdleRadioGuard.setOnClickListener {
+            val next = !BoyktaUserProfileStore.getAutoCloseIdleRadios(this)
+            BoyktaUserProfileStore.setAutoCloseIdleRadios(this, next)
+            updateStatusUi()
+            val sal = BoyktaUserProfileStore.salutation(this)
+            val msg = if (next) {
+                "حسناً $sal، تم تفعيل حارس البلوتوث والواي فاي الذكي لحفظ البطارية."
+            } else {
+                "تم إيقاف الإغلاق التلقائي، سأكتفي بتنبيهك صوتياً فقط."
+            }
+            appendLog("النظام", msg)
+            ttsManager.speak(msg)
+        }
+
+        findViewById<Button>(R.id.btnSaveUserName).setOnClickListener {
+            val name = etUserName.text.toString().trim()
+            BoyktaUserProfileStore.setUserName(this, name)
+            updateStatusUi()
+            val msg = if (name.isNotEmpty()) {
+                "تشرفنا يا $name، سأناديك بهذا الاسم دائماً."
+            } else {
+                "تم مسح الاسم، سأناديك بصديقي."
+            }
+            appendLog("النظام", msg)
+            ttsManager.speak(msg)
+        }
+
+        findViewById<Button>(R.id.btnAddReminder).setOnClickListener {
+            val desc = etReminderText.text.toString().trim()
+            val timeRaw = etReminderTime.text.toString().trim()
+            if (desc.isEmpty()) {
+                appendLog("النظام", "اكتب وصف التذكير الذي تريد أن أقوله لك.")
+                return@setOnClickListener
+            }
+            val triggerAt = parseReminderTriggerMillis(timeRaw)
+            BoyktaReminderStore.addReminder(this, desc, triggerAt)
+            etReminderText.setText("")
+            etReminderTime.setText("")
+            updateStatusUi()
+            val formatted = SimpleDateFormat("HH:mm", Locale.US).format(Date(triggerAt))
+            val sal = BoyktaUserProfileStore.salutation(this)
+            val confirm = "حسناً $sal، سأذكرك في الساعة $formatted بقولي: $desc."
+            appendLog("بويكتا", confirm)
+            ttsManager.speak(confirm)
+        }
+
+        findViewById<Button>(R.id.btnClearReminders).setOnClickListener {
+            BoyktaReminderStore.clearAll(this)
+            updateStatusUi()
+            appendLog("النظام", "تم مسح جميع التذكيرات.")
+            ttsManager.speak("تم مسح التذكيرات يا ${BoyktaUserProfileStore.shortNameOrFriend(this)}.")
         }
 
         btnTeachWakeWord.setOnClickListener {
@@ -434,6 +523,26 @@ class MainActivity : AppCompatActivity() {
         updateStatusUi()
     }
 
+    private fun parseReminderTriggerMillis(raw: String): Long {
+        val now = System.currentTimeMillis()
+        val clean = raw.trim()
+        val colonMatch = Regex("(\\d{1,2}):(\\d{2})").find(clean)
+        if (colonMatch != null) {
+            val hh = colonMatch.groupValues[1].toIntOrNull()?.coerceIn(0, 23) ?: 9
+            val mm = colonMatch.groupValues[2].toIntOrNull()?.coerceIn(0, 59) ?: 0
+            val cal = Calendar.getInstance().apply {
+                set(Calendar.HOUR_OF_DAY, hh)
+                set(Calendar.MINUTE, mm)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+                if (timeInMillis <= now) add(Calendar.DAY_OF_YEAR, 1)
+            }
+            return cal.timeInMillis
+        }
+        val mins = Regex("(\\d{1,4})").find(clean)?.groupValues?.get(1)?.toLongOrNull() ?: 15L
+        return now + mins.coerceAtLeast(1L) * 60_000L
+    }
+
     private fun requestRequiredPermissions() {
         val perms = mutableListOf(
             Manifest.permission.RECORD_AUDIO,
@@ -443,6 +552,9 @@ class MainActivity : AppCompatActivity() {
             Manifest.permission.CALL_PHONE,
             Manifest.permission.CAMERA
         )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            perms.add(Manifest.permission.BLUETOOTH_CONNECT)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             perms.add(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -529,6 +641,10 @@ class MainActivity : AppCompatActivity() {
         val freeRamMb = mi.availMem / (1024 * 1024)
 
         val arabicTtsReady = ttsManager.isArabicReady()
+        val notifOk = BoyktaNotificationListener.isPermissionGranted(this)
+        val autoRadioGuard = BoyktaUserProfileStore.getAutoCloseIdleRadios(this)
+        val activeReminders = BoyktaReminderStore.getActiveReminders(this)
+        val userName = BoyktaUserProfileStore.shortNameOrFriend(this)
         tvTtsWarning.visibility = if (miroReady) View.GONE else View.VISIBLE
 
         btnDownloadMiroVoice.text = if (miroReady) {
@@ -557,6 +673,18 @@ class MainActivity : AppCompatActivity() {
             "💾 تفعيل الحفظ الدائم (/BoyktaModels) لحماية الحزم"
         }
 
+        btnNotifListenerPermission.text = if (notifOk) {
+            "✓ مراقب الإشعارات غير المقروءة مفعّل"
+        } else {
+            "📩 تفعيل مراقب الرسائل غير المقروءة"
+        }
+
+        btnToggleIdleRadioGuard.text = if (autoRadioGuard) {
+            "🔋 حارس البلوتوث والواي فاي: إغلاق وتنبيه تلقائي"
+        } else {
+            "🔋 حارس البلوتوث والواي فاي: تنبيه صوتي فقط"
+        }
+
         btnTeachWakeWord.text = if (customWakeCount > 0) {
             "🎯 علّمني نطقي لكلمة بويكتا (محفوظ $customWakeCount)"
         } else {
@@ -571,12 +699,21 @@ class MainActivity : AppCompatActivity() {
             else -> "غير محمل (حمل Miro V2)"
         }
 
+        tvRemindersList.text = if (activeReminders.isEmpty()) {
+            "لا توجد تذكيرات نشطة حالياً."
+        } else {
+            val fmt = SimpleDateFormat("HH:mm", Locale.US)
+            activeReminders.joinToString("\n") { rem ->
+                "⏰ ${fmt.format(Date(rem.triggerAtMillis))} — ${rem.title}"
+            }
+        }
+
         tvStatus.text = buildString {
-            appendLine("حالة Galaxy M13 (armeabi-v7a) — الشحن: $batteryPct% · الرام الحرة: ${freeRamMb}MB")
+            appendLine("مرحباً $userName · Galaxy M13 (armeabi-v7a) — الشحن: $batteryPct% · الرام الحرة: ${freeRamMb}MB")
             appendLine("• النطق (الفصحى): $voiceStatusStr")
-            appendLine("• السمع الذكي: Moonshine ${if (moonshineReady) "✓ (مفعّل)" else "✗"} · الفصحى ${if (fushaReady) "✓" else "✗"} · الدارجة ${if (darijaReady) "✓" else "✗"}")
-            appendLine("• المايك: ${if (micOk) "✓" else "✗"} · التحكم الشامل: ${if (accOk) "✓" else "✗"} · النافذة: ${if (overlayOk) "✓" else "✗"} · الدائم: ${if (persistentOk) "✓" else "✗"}")
-            append("• السطوع: ${if (writeOk) "✓" else "✗"} · جهات الاتصال: ${if (contactsOk) "✓" else "✗"} · نطقك الخاص: $customWakeCount")
+            appendLine("• السمع: Moonshine ${if (moonshineReady) "✓" else "✗"} · الفصحى ${if (fushaReady) "✓" else "✗"} · الدارجة ${if (darijaReady) "✓" else "✗"}")
+            appendLine("• المايك: ${if (micOk) "✓" else "✗"} · الشامل: ${if (accOk) "✓" else "✗"} · الإشعارات: ${if (notifOk) "✓" else "✗"} · الدائم: ${if (persistentOk) "✓" else "✗"}")
+            append("• السطوع: ${if (writeOk) "✓" else "✗"} · الأسماء: ${if (contactsOk) "✓" else "✗"} · تذكيرات: ${activeReminders.size}")
         }
     }
 

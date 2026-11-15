@@ -8,6 +8,9 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -21,6 +24,9 @@ import android.hardware.SensorManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
@@ -41,10 +47,14 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.boykta.assistant.R
 import com.boykta.assistant.audio.AudioChimes
+import com.boykta.assistant.audio.ArabicNumberToWords
 import com.boykta.assistant.audio.MaleTtsManager
+import com.boykta.assistant.nlu.BoyktaReminderStore
+import com.boykta.assistant.nlu.BoyktaUserProfileStore
 import com.boykta.assistant.nlu.CustomWakeStore
 import com.boykta.assistant.nlu.DarijaIntentRouter
 import com.boykta.assistant.nlu.WakeWordMatcher
+import com.boykta.assistant.receiver.BoyktaReminderReceiver
 import com.boykta.assistant.storage.SdCardModelLocator
 import com.boykta.assistant.ui.BoyktaRobotView
 import com.k2fsa.sherpa.onnx.FeatureConfig
@@ -133,6 +143,14 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
     private var teachWakeExpiresAtMs = 0L
 
     private var lastWakeChimeAtMs = 0L
+    private var lastLowBatteryAlertAtMs = 0L
+    private var lastFullBatteryAlertAtMs = 0L
+    private var fullBatteryAlertSentForCharge = false
+    private var btIdleSinceMs = 0L
+    private var wifiIdleSinceMs = 0L
+    private var lastBtGuardAtMs = 0L
+    private var lastWifiGuardAtMs = 0L
+
     private var isScreenOn = true
     private var isCharging = false
     private var isInPocket = false
@@ -144,13 +162,43 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
             when (intent?.action) {
                 Intent.ACTION_SCREEN_ON -> isScreenOn = true
                 Intent.ACTION_SCREEN_OFF -> isScreenOn = false
-                Intent.ACTION_POWER_CONNECTED -> isCharging = true
-                Intent.ACTION_POWER_DISCONNECTED -> isCharging = false
+                Intent.ACTION_POWER_CONNECTED -> {
+                    isCharging = true
+                    fullBatteryAlertSentForCharge = false
+                }
+                Intent.ACTION_POWER_DISCONNECTED -> {
+                    isCharging = false
+                    fullBatteryAlertSentForCharge = false
+                }
+                Intent.ACTION_BATTERY_CHANGED -> {
+                    val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+                    val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100).coerceAtLeast(1)
+                    val pct = if (level >= 0) (level * 100) / scale else -1
+                    val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+                    val plugged = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0)
+                    val chargingNow = plugged != 0 || status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
+                    isCharging = chargingNow
+                    if (!chargingNow && pct in 0..89) {
+                        fullBatteryAlertSentForCharge = false
+                    }
+                    checkBatteryVoiceAlerts(pct, chargingNow, status == BatteryManager.BATTERY_STATUS_FULL)
+                }
                 Intent.ACTION_HEADSET_PLUG -> {
                     isHeadsetConnected = intent.getIntExtra("state", 0) == 1
                 }
             }
             evaluateBatterySafeListeningGate()
+        }
+    }
+
+    private val radioAndReminderTicker = object : Runnable {
+        override fun run() {
+            try {
+                checkDueRemindersBackup()
+                checkIdleRadiosGuard()
+            } catch (_: Throwable) {
+            }
+            mainHandler.postDelayed(this, 60_000L)
         }
     }
 
@@ -221,6 +269,7 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
             addAction(Intent.ACTION_SCREEN_OFF)
             addAction(Intent.ACTION_POWER_CONNECTED)
             addAction(Intent.ACTION_POWER_DISCONNECTED)
+            addAction(Intent.ACTION_BATTERY_CHANGED)
             addAction(Intent.ACTION_HEADSET_PLUG)
         }
         ContextCompat.registerReceiver(
@@ -234,6 +283,7 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
             attachFloatingBubble()
         }
 
+        mainHandler.postDelayed(radioAndReminderTicker, 25_000L)
         loadOfflineArabicModel(forceReload = true)
     }
 
@@ -245,7 +295,12 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
             }
             BoyktaEvents.ACTION_SIMULATE_WAKE -> {
                 isTeachingWakeMode = false
-                triggerOkGoogleWakeUi("أنا أسمعك الآن، تفضل بأمرك.")
+                val sal = BoyktaUserProfileStore.salutation(this)
+                val prompt = BoyktaUserProfileStore.pickVaried(
+                    "svc_wake",
+                    listOf("تفضل $sal، أنا أسمعك.", "نعم $sal، ما طلبك؟", "حاضر $sal، تفضل.")
+                )
+                triggerOkGoogleWakeUi(prompt)
             }
             BoyktaEvents.ACTION_TEACH_WAKE_START -> {
                 isTeachingWakeMode = true
@@ -816,7 +871,8 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
         if (System.currentTimeMillis() > awakeCommandUntilMs &&
             WakeWordMatcher.containsWakeWord(partial, WAKE_WORD, this)
         ) {
-            triggerOkGoogleWakeUi("تم سماع ندائك، تفضل بأمرك...")
+            val sal = BoyktaUserProfileStore.salutation(this)
+            triggerOkGoogleWakeUi("تفضل $sal، أنا أسمعك الآن...")
         }
     }
 
@@ -866,7 +922,12 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
         val commandOnly = WakeWordMatcher.stripWakeWord(text, WAKE_WORD, this)
 
         if (commandOnly.isEmpty() && !isAwakeWindow) {
-            triggerOkGoogleWakeUi("نعم، أنا أسمعك الآن. تفضل بأمرك.")
+            val sal = BoyktaUserProfileStore.salutation(this)
+            val prompt = BoyktaUserProfileStore.pickVaried(
+                "wake_cmd",
+                listOf("نعم $sal، تفضل.", "أنا أسمعك $sal.", "حاضر $sal، ما طلبك؟")
+            )
+            triggerOkGoogleWakeUi(prompt)
             return
         }
 
@@ -966,6 +1027,7 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(radioAndReminderTicker)
         hideWakeOverlaySheet()
         stopRecognizerStream()
         try {
@@ -991,5 +1053,139 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
         bubbleView?.let { windowManager?.removeView(it) }
         ttsManager.shutdown()
         super.onDestroy()
+    }
+
+    private fun checkDueRemindersBackup() {
+        val due = BoyktaReminderStore.popDueReminders(this, System.currentTimeMillis())
+        for (item in due) {
+            BoyktaReminderReceiver().triggerReminderAlert(
+                this,
+                item.title,
+                (item.id and 0x7FFF).toInt().coerceAtLeast(2100)
+            )
+        }
+    }
+
+    private fun checkBatteryVoiceAlerts(pct: Int, charging: Boolean, isFullStatus: Boolean) {
+        if (pct !in 0..100) return
+        val now = System.currentTimeMillis()
+        if (BoyktaUserProfileStore.isQuietNightHours()) return
+        val sal = BoyktaUserProfileStore.salutation(this)
+
+        if (!charging && pct in 1..15 && now - lastLowBatteryAlertAtMs > 25 * 60_000L) {
+            lastLowBatteryAlertAtMs = now
+            val msg = BoyktaUserProfileStore.pickVaried(
+                "batt_low",
+                listOf(
+                    "تنبيه $sal، البطارية منخفضة عند ${ArabicNumberToWords.numberToWords(pct)} بالمئة. ضع الهاتف في الشاحن.",
+                    "$sal، الشحن أوشك على النفاد عند $pct%. يُستحسن توصيل الشاحن الآن."
+                )
+            )
+            broadcastState(BoyktaEvents.TYPE_COMMAND, "تنبيه البطارية", msg)
+            ttsManager.speak(msg)
+            return
+        }
+
+        if (charging && (isFullStatus || pct >= 95) && !fullBatteryAlertSentForCharge &&
+            now - lastFullBatteryAlertAtMs > 30 * 60_000L
+        ) {
+            fullBatteryAlertSentForCharge = true
+            lastFullBatteryAlertAtMs = now
+            val msg = BoyktaUserProfileStore.pickVaried(
+                "batt_full",
+                listOf(
+                    "$sal، اكتمل شحن الهاتف الآن عند $pct%. يمكنك نزع الشاحن.",
+                    "بشرى سارة $sal، البطارية وصلت إلى $pct% والشحن جاهز."
+                )
+            )
+            broadcastState(BoyktaEvents.TYPE_COMMAND, "اكتمال الشحن", msg)
+            ttsManager.speak(msg)
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun checkIdleRadiosGuard() {
+        val now = System.currentTimeMillis()
+        if (BoyktaUserProfileStore.isQuietNightHours()) return
+        val sal = BoyktaUserProfileStore.salutation(this)
+        val autoClose = BoyktaUserProfileStore.getAutoCloseIdleRadios(this)
+
+        // 1. Bluetooth idle check (enabled + no connected audio/GATT device)
+        val btManager = getSystemService(BLUETOOTH_SERVICE) as? BluetoothManager
+        val btAdapter = btManager?.adapter
+        val btPermOk = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+        if (btAdapter != null && btPermOk) {
+            val btEnabled = try { btAdapter.isEnabled } catch (_: SecurityException) { false }
+            if (btEnabled) {
+                val hasConnectedBt = try {
+                    val a2dp = btAdapter.getProfileConnectionState(BluetoothProfile.A2DP) == BluetoothProfile.STATE_CONNECTED
+                    val hs = btAdapter.getProfileConnectionState(BluetoothProfile.HEADSET) == BluetoothProfile.STATE_CONNECTED
+                    val gatt = btManager.getConnectedDevices(BluetoothProfile.GATT).isNotEmpty()
+                    a2dp || hs || gatt
+                } catch (_: SecurityException) {
+                    true
+                }
+                if (!hasConnectedBt) {
+                    if (btIdleSinceMs == 0L) btIdleSinceMs = now
+                    if (now - btIdleSinceMs >= 4 * 60_000L && now - lastBtGuardAtMs >= 25 * 60_000L) {
+                        lastBtGuardAtMs = now
+                        var closed = false
+                        if (autoClose && Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                            @Suppress("DEPRECATION")
+                            closed = try { btAdapter.disable() } catch (_: SecurityException) { false }
+                        }
+                        val msg = if (closed) {
+                            "$sal، أغلقتُ البلوتوث تلقائياً لأنه كان مفتوحاً دون اتصال لحفظ البطارية."
+                        } else {
+                            BoyktaUserProfileStore.pickVaried(
+                                "bt_idle_warn",
+                                listOf(
+                                    "أغلق البلوتوث $sal، إنه مفتوح دون اتصال ويستهلك البطارية.",
+                                    "تنبيه $sal، البلوتوث شغال دون أي جهاز متصل، يفضل إغلاقه."
+                                )
+                            )
+                        }
+                        broadcastState(BoyktaEvents.TYPE_COMMAND, "حماية البلوتوث", msg)
+                        ttsManager.speak(msg)
+                    }
+                } else {
+                    btIdleSinceMs = 0L
+                }
+            } else {
+                btIdleSinceMs = 0L
+            }
+        }
+
+        // 2. Wi-Fi idle check (enabled + not connected to any Wi-Fi network)
+        val wifiMgr = applicationContext.getSystemService(WIFI_SERVICE) as? WifiManager
+        val cm = getSystemService(CONNECTIVITY_SERVICE) as? ConnectivityManager
+        if (wifiMgr != null && wifiMgr.isWifiEnabled) {
+            val net = cm?.activeNetwork
+            val caps = if (net != null) cm.getNetworkCapabilities(net) else null
+            val wifiConnected = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+            if (!wifiConnected) {
+                if (wifiIdleSinceMs == 0L) wifiIdleSinceMs = now
+                if (now - wifiIdleSinceMs >= 4 * 60_000L && now - lastWifiGuardAtMs >= 25 * 60_000L) {
+                    lastWifiGuardAtMs = now
+                    var closed = false
+                    if (autoClose && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                        @Suppress("DEPRECATION")
+                        closed = try { wifiMgr.setWifiEnabled(false) } catch (_: SecurityException) { false }
+                    }
+                    val msg = if (closed) {
+                        "$sal، أغلقتُ الواي فاي تلقائياً لعدم اتصاله بأي شبكة."
+                    } else {
+                        "أغلق الواي فاي $sal، إنه يعمل دون شبكة ويستهلك البطارية."
+                    }
+                    broadcastState(BoyktaEvents.TYPE_COMMAND, "حماية الواي فاي", msg)
+                    ttsManager.speak(msg)
+                }
+            } else {
+                wifiIdleSinceMs = 0L
+            }
+        } else {
+            wifiIdleSinceMs = 0L
+        }
     }
 }

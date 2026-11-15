@@ -1,22 +1,33 @@
 package com.boykta.assistant.nlu
 
+import android.Manifest
 import android.app.ActivityManager
+import android.app.NotificationManager
+import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.hardware.camera2.CameraManager
 import android.media.AudioManager
 import android.net.Uri
+import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
+import android.os.Environment
+import android.os.StatFs
+import android.os.SystemClock
 import android.provider.AlarmClock
 import android.provider.ContactsContract
 import android.provider.MediaStore
 import android.provider.Settings
+import android.view.KeyEvent
+import androidx.core.content.ContextCompat
 import com.boykta.assistant.audio.ArabicNumberToWords
 import com.boykta.assistant.service.BoyktaAccessibilityService
 import java.io.File
+import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Date
 import java.util.Locale
 
 enum class ActionType {
@@ -405,12 +416,113 @@ object DarijaIntentRouter {
         val hasLaughter = Regex("(ههه|هاها|خهه)").containsMatchIn(norm)
         val withoutWake = WakeWordMatcher.stripWakeWord(norm, "بويكتا", context)
         val cleaned = stripNoiseAndChatter(withoutWake)
+        val sal = BoyktaUserProfileStore.salutation(context)
 
         if (cleaned.isEmpty()) {
             return if (hasLaughter) {
-                "أهلاً بك يا صديقي، أنا أسمعك بوضوح. أخبرني بما تريد أن أنفذه لك في الهاتف."
+                BoyktaUserProfileStore.pickVaried(
+                    "wake_laugh",
+                    listOf("أهلاً $sal، تفضل بطلبك.", "حاضر $sal، ما الذي تريده؟")
+                )
             } else {
-                "نعم، أنا معك وأسمعك على مدار الساعة. تفضل بأمرك."
+                BoyktaUserProfileStore.pickVaried(
+                    "wake_empty",
+                    listOf("نعم $sal، تفضل.", "أنا أسمعك $sal.", "حاضر $sal، تفضل بأمرك.")
+                )
+            }
+        }
+
+        // Support multi-clause compound commands ("افتح فيسبوك ثم كم الساعة" / "نظف الرام وافتح الكاميرا")
+        val clauses = splitMultiClauses(cleaned)
+        if (clauses.size > 1) {
+            val replies = mutableListOf<String>()
+            for (clause in clauses.take(3)) {
+                val res = executeSingleClause(context, clause, hasLaughter)
+                if (res.isNotBlank()) replies.add(res)
+            }
+            if (replies.isNotEmpty()) {
+                return replies.joinToString(" ")
+            }
+        }
+
+        return executeSingleClause(context, cleaned, hasLaughter)
+    }
+
+    private fun splitMultiClauses(cleaned: String): List<String> {
+        val primary = cleaned.split(Regex("\\s+(?:ثم|وبعدها|وبعدين|بعدين|بعد ذلك)\\s+"))
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        val result = mutableListOf<String>()
+        val actionVerbs = listOf(
+            "افتح", "حل", "شعل", "طفي", "اغلق", "نظف", "صور", "دير", "التقط",
+            "اقرا", "اقري", "كم", "شحال", "اتصل", "عيط", "ارفع", "نقص",
+            "فكرني", "ذكرني", "نبهني", "ابحث", "شغل", "اوقف", "حط", "اجعل"
+        )
+        for (part in primary) {
+            val andIdx = part.indexOf(" و")
+            if (andIdx > 3 && andIdx + 2 < part.length) {
+                val right = part.substring(andIdx + 2).trim()
+                val rightStartsWithAction = actionVerbs.any { v -> right.startsWith(v) }
+                if (rightStartsWithAction) {
+                    result.add(part.substring(0, andIdx).trim())
+                    result.addAll(splitMultiClauses(right))
+                    continue
+                }
+            }
+            result.add(part)
+        }
+        return result.filter { it.isNotBlank() }
+    }
+
+    private fun executeSingleClause(context: Context, cleaned: String, hasLaughter: Boolean): String {
+        val sal = BoyktaUserProfileStore.salutation(context)
+
+        // 0. Save user name by voice ("اسمي يونس", "سميني يونس", "ناديني يونس")
+        val nameMatch = Regex("^(?:اسمي|سميني|ناديني|اسمي هو|عياطلي|قولي)\\s+(.+)$").find(cleaned)
+        if (nameMatch != null) {
+            val rawName = nameMatch.groupValues[1]
+                .replace(Regex("^(هو|يا)\\s+"), "")
+                .trim()
+                .split(" ")
+                .take(2)
+                .joinToString(" ")
+            if (rawName.length >= 2) {
+                BoyktaUserProfileStore.setUserName(context, rawName)
+                return "تشرفنا يا $rawName، سأناديك بهذا الاسم دائماً."
+            }
+        }
+
+        // 0.5 Voice Reminders ("فكرني بعد 10 دقائق ...", "ذكرني على 18:30 ...", "ما هي تذكيراتي")
+        if (Regex("(تذكيراتي|وش عندي تذكير|اش عندي تذكير|اقرا التذكيرات|اعرض التذكيرات)").containsMatchIn(cleaned)) {
+            val active = BoyktaReminderStore.getActiveReminders(context)
+            if (active.isEmpty()) {
+                return "لا توجد لديك تذكيرات نشطة حالياً $sal."
+            }
+            val fmt = SimpleDateFormat("HH:mm", Locale.US)
+            val summary = active.take(3).joinToString("، ") {
+                "في ${fmt.format(Date(it.triggerAtMillis))}: ${it.title}"
+            }
+            return "لديك ${active.size} تذكيرات $sal: $summary."
+        }
+        if (Regex("(امسح التذكيرات|احذف التذكيرات|الغي التذكيرات)").containsMatchIn(cleaned)) {
+            BoyktaReminderStore.clearAll(context)
+            return "تم مسح جميع التذكيرات $sal."
+        }
+        if (cleaned.startsWith("فكرني") || cleaned.startsWith("ذكرني") || cleaned.startsWith("نبهني") ||
+            cleaned.contains("تذكير")
+        ) {
+            val reminderReply = parseAndAddVoiceReminder(context, cleaned)
+            if (reminderReply != null) return reminderReply
+        }
+
+        // 0.8 Follow-up context memory ("زيد فيه" / "نقص فيه")
+        if (Regex("^(زيد فيه|ارفع فيه|قويه|نقص فيه|وطيه|هبطه)$").containsMatchIn(cleaned)) {
+            val topic = BoyktaUserProfileStore.getLastTopic(context)
+            val down = cleaned.contains("نقص") || cleaned.contains("وط") || cleaned.contains("هبط")
+            if (topic == "BRIGHTNESS") {
+                return adjustBrightness(context, if (down) "DOWN" else "UP", if (down) "خفضت السطوع $sal." else "رفعت السطوع $sal.")
+            } else if (topic == "VOLUME") {
+                return adjustVolume(context, if (down) "DOWN" else "UP", if (down) "خفضت الصوت $sal." else "رفعت الصوت $sal.")
             }
         }
 
@@ -426,11 +538,11 @@ object DarijaIntentRouter {
         if (clickMatch != null) {
             val targetText = clickMatch.groupValues[1].trim()
             val acc = BoyktaAccessibilityService.instance
-                ?: return "يرجى تفعيل صلاحية التحكم الشامل من التطبيق حتى أتمكن من الضغط على $targetText."
+                ?: return "يرجى تفعيل التحكم الشامل أولاً للضغط على $targetText."
             return if (acc.clickOnScreenText(targetText)) {
-                "تم الأمر، لقد ضغطت لك على $targetText."
+                "تم الضغط على $targetText $sal."
             } else {
-                "عذراً، لم أجد زراً مكتوباً عليه $targetText في الشاشة الحالية."
+                "لم أجد زراً باسم $targetText في الشاشة الحالية."
             }
         }
 
@@ -462,24 +574,24 @@ object DarijaIntentRouter {
                     cleaned.contains(normalizeArabic(c.arabicName))
                 ) {
                     placeCall(context, c.phoneNumber)
-                    return "حسناً، أنا أتصل الآن بـ ${c.arabicName}."
+                    return "جاري الاتصال بـ ${c.arabicName} $sal."
                 }
             }
             val dynamicMatch = findContactInPhone(context, cleaned)
             if (dynamicMatch != null) {
                 placeCall(context, dynamicMatch.second)
-                return "حسناً، أنا أتصل الآن بـ ${dynamicMatch.first}."
+                return "جاري الاتصال بـ ${dynamicMatch.first} $sal."
             }
-            return "عذراً، لم أجد هذا الاسم في جهات الاتصال."
+            return "لم أجد هذا الاسم في جهات الاتصال $sal."
         }
 
         val cleanedWords = cleaned.split(" ").filter { it.isNotBlank() }
         val stemmedWords = cleanedWords.map { stemArabicToken(it) }
 
-        // 6. Semantic Concept Engine (understands meaning without needing exact wording)
+        // 6. Semantic Concept Engine
         trySemanticIntent(context, cleaned, cleanedWords, stemmedWords)?.let { return it }
 
-        // 7. Scored rule matcher (uses stemmed tokens too)
+        // 7. Scored rule matcher
         var bestRule: CommandRule? = null
         var bestScore = 0
         for (rule in rules) {
@@ -509,7 +621,7 @@ object DarijaIntentRouter {
             return performAction(context, bestRule)
         }
 
-        // 8. Dynamic app launcher (Arabic hints + phonetic Arabic-to-Latin transliteration)
+        // 8. Dynamic app launcher
         val openVerbs = listOf("افتح", "حل", "شعل", "ديرلي", "دير", "ادخل", "روح", "شغل")
         val mentionsAppOrHardware =
             arabicToPackageHints.keys.any { cleaned.contains(normalizeArabic(it)) } ||
@@ -532,9 +644,15 @@ object DarijaIntentRouter {
         }
 
         // 9. Polite Fusha conversational intelligence
-        tryPersonaReply(cleaned, hasLaughter)?.let { return it }
+        tryPersonaReply(context, cleaned, hasLaughter)?.let { return it }
 
-        return "لم ألتقط طلبك بوضوح وسط الصوت المحيط. يمكنك أن تقول مثلاً: كم الساعة، التقط لقطة شاشة، افتح فري فاير، أو نظف الذاكرة."
+        return BoyktaUserProfileStore.pickVaried(
+            "fallback",
+            listOf(
+                "لم أفهم الطلب جيداً $sal، أعد صياغته باختصار.",
+                "لم يظهر الأمر بوضوح $sal، قل مثلاً: كم الساعة أو افتح تطبيقاً."
+            )
+        )
     }
 
     private fun trySemanticIntent(
@@ -543,27 +661,103 @@ object DarijaIntentRouter {
         cleanedWords: List<String>,
         stemmedWords: List<String>
     ): String? {
-        // Screenshot: "دير لقطة شاشة", "صور الشاشة", "التقط شاشة", "كابتور"
+        val sal = BoyktaUserProfileStore.salutation(context)
+
+        // Screenshot
         val wantsScreenshot =
             (hasAnyConcept(stemmedWords, cleaned, "لقطه", "التقط", "صور", "صوره", "كابتور", "سكرين") &&
                 hasAnyConcept(stemmedWords, cleaned, "شاشه", "كابتور", "سكرين")) ||
                 cleaned.contains("لقطه شاشه") ||
                 cleaned.contains("صور الشاشه")
         if (wantsScreenshot) {
-            return performAccessibilityNav("SCREENSHOT", "حسناً، لقد التقطت صورة للشاشة الآن.")
+            return performAccessibilityNav(
+                "SCREENSHOT",
+                BoyktaUserProfileStore.pickVaried(
+                    "screenshot",
+                    listOf("تم التقاط صورة للشاشة $sal.", "التقطت لك لقطة شاشة الآن.")
+                )
+            )
         }
 
-        // Alarm with optional hour
+        // Web / YouTube / Maps Search
+        if (cleaned.contains("ابحث") || cleaned.contains("حوس") || cleaned.contains("فتش")) {
+            val yt = cleaned.contains("يوتيوب")
+            val maps = cleaned.contains("خرائط") || cleaned.contains("مابس") || cleaned.contains("طريق") || cleaned.contains("وين")
+            val q = cleaned
+                .replace(Regex("(ابحث|حوس|فتش|في|عن|على|علي|يوتيوب|غوغل|جوجل|خرائط|مابس)"), " ")
+                .replace(Regex("\\s+"), " ")
+                .trim()
+            if (q.length >= 2) {
+                return openSearchIntent(context, q, yt, maps, sal)
+            }
+        }
+
+        // Bluetooth & Wi-Fi voice close/toggle
+        if (hasAnyConcept(stemmedWords, cleaned, "بلوتوث", "بلوتوت") &&
+            hasAnyConcept(stemmedWords, cleaned, "طفي", "اغلق", "سكر", "اقفل", "عطل")
+        ) {
+            return toggleBluetoothVoice(context, sal)
+        }
+        if (hasAnyConcept(stemmedWords, cleaned, "ويفي", "وايفاي") &&
+            hasAnyConcept(stemmedWords, cleaned, "طفي", "اغلق", "سكر", "اقفل", "عطل")
+        ) {
+            return toggleWifiVoice(context, sal)
+        }
+
+        // Hotspot / Location / Airplane panels
+        if (hasAnyConcept(stemmedWords, cleaned, "نقطه اتصال", "هوتسبوت", "بارطاج", "مشاركه الانترنت")) {
+            return openSettingsAction(context, Settings.ACTION_WIRELESS_SETTINGS, "فتحت لك إعدادات نقطة الاتصال $sal.")
+        }
+        if (hasAnyConcept(stemmedWords, cleaned, "موقع", "لوكاليزاسيون", "جي بي اس")) {
+            return openSettingsAction(context, Settings.ACTION_LOCATION_SOURCE_SETTINGS, "فتحت لك إعدادات الموقع الجغرافي $sal.")
+        }
+        if (hasAnyConcept(stemmedWords, cleaned, "طيران", "وضع الطيران")) {
+            return openSettingsAction(context, Settings.ACTION_AIRPLANE_MODE_SETTINGS, "فتحت لك إعدادات وضع الطيران $sal.")
+        }
+
+        // Ringer mode: Silent / Vibrate / Normal
+        if (hasAnyConcept(stemmedWords, cleaned, "صامت", "كتم", "سيلونسيو", "سكات")) {
+            return setRingerModeCompat(context, AudioManager.RINGER_MODE_SILENT, "تم تحويل الهاتف إلى الوضع الصامت $sal.")
+        }
+        if (hasAnyConcept(stemmedWords, cleaned, "هزاز", "فيبرور", "اهتزاز")) {
+            return setRingerModeCompat(context, AudioManager.RINGER_MODE_VIBRATE, "تم تفعيل وضع الاهتزاز $sal.")
+        }
+        if (hasAnyConcept(stemmedWords, cleaned, "وضع عادي", "رجع الصوت", "صوت الرنين")) {
+            return setRingerModeCompat(context, AudioManager.RINGER_MODE_NORMAL, "تمت إعادة صوت الرنين العادي $sal.")
+        }
+
+        // Media Playback controls
+        if (hasAnyConcept(stemmedWords, cleaned, "موسيقي", "اغنيه", "فيديو", "مقطع", "قران")) {
+            if (hasAnyConcept(stemmedWords, cleaned, "اوقف", "وقف", "طفي", "توقف")) {
+                return sendMediaKey(context, KeyEvent.KEYCODE_MEDIA_PAUSE, "أوقفت التشغيل $sal.")
+            }
+            if (hasAnyConcept(stemmedWords, cleaned, "التالي", "بدل", "فوت")) {
+                return sendMediaKey(context, KeyEvent.KEYCODE_MEDIA_NEXT, "انتقلت للمقطع التالي.")
+            }
+            if (hasAnyConcept(stemmedWords, cleaned, "السابق", "رجع")) {
+                return sendMediaKey(context, KeyEvent.KEYCODE_MEDIA_PREVIOUS, "عدت للمقطع السابق.")
+            }
+            if (hasAnyConcept(stemmedWords, cleaned, "شغل", "كمل", "واصل")) {
+                return sendMediaKey(context, KeyEvent.KEYCODE_MEDIA_PLAY, "استأنفت التشغيل $sal.")
+            }
+        }
+
+        // Storage Space info
+        if (hasAnyConcept(stemmedWords, cleaned, "مساحه", "ستوكاج", "سعه التخزين") && !hasAnyConcept(stemmedWords, cleaned, "نظف")) {
+            return getStorageInfoReply(context, sal)
+        }
+
+        // Alarm
         if (hasAnyConcept(stemmedWords, cleaned, "منبه", "الارم")) {
             val hourMatch = Regex("\\b(\\d{1,2})\\b").find(cleaned)
             val hour = hourMatch?.groupValues?.get(1)?.toIntOrNull()
             if (hour != null && hour in 0..23) {
                 return setAlarmForTime(context, hour, 0)
             }
-            return openAlarmApp(context, "حسناً، لقد فتحت لك تطبيق المنبه والساعة.")
+            return openAlarmApp(context, "فتحت لك تطبيق المنبه $sal.")
         }
 
-        // Time and Date: "شحال ساعة", "كم الساعة", "قداه الوقت", "شحال راه الوقت", "تاريخ اليوم"
+        // Time & Date
         val wantsDate = hasAnyConcept(stemmedWords, cleaned, "تاريخ", "التاريخ", "اي يوم", "النهار", "شهر")
         val wantsTime = hasAnyConcept(stemmedWords, cleaned, "ساعه", "الوقت", "وقت") &&
             !hasAnyConcept(stemmedWords, cleaned, "افتح", "تطبيق")
@@ -573,7 +767,7 @@ object DarijaIntentRouter {
             val dayNum = cal.get(Calendar.DAY_OF_MONTH)
             val monthName = arabicMonths.getOrElse(cal.get(Calendar.MONTH)) { "" }
             val year = cal.get(Calendar.YEAR)
-            return "اليوم هو $dayName، الموافق لـ $dayNum $monthName سنة $year."
+            return "اليوم $dayName، $dayNum $monthName $year."
         }
         if (wantsTime) {
             val cal = Calendar.getInstance()
@@ -581,76 +775,113 @@ object DarijaIntentRouter {
             val min = cal.get(Calendar.MINUTE)
             val dayName = arabicDays.getOrElse(cal.get(Calendar.DAY_OF_WEEK)) { "" }
             val hhMm = String.format(Locale.US, "%02d:%02d", hour, min)
-            return "الساعة الآن هي $hhMm، واليوم هو $dayName."
+            return BoyktaUserProfileStore.pickVaried(
+                "time_now",
+                listOf("الساعة الآن $hhMm $sal.", "الوقت الآن $hhMm من يوم $dayName.")
+            )
         }
 
-        // Battery level
+        // Battery
         if (hasAnyConcept(stemmedWords, cleaned, "باتري", "بطاريه", "شحن", "تشارج")) {
             val bm = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
             val pct = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-            val state = if (bm.isCharging) "والهاتف قيد الشحن حالياً" else "وهي في حالة جيدة"
-            return "نسبة شحن البطارية الآن $pct% $state."
+            val state = if (bm.isCharging) "قيد الشحن" else "غير متصلة بالشاحن"
+            return BoyktaUserProfileStore.pickVaried(
+                "batt_check",
+                listOf("البطارية عند $pct% وهي $state.", "الشحن الآن $pct% $sal ($state).")
+            )
         }
 
-        // Clean RAM & background apps
-        if (hasAnyConcept(stemmedWords, cleaned, "نظف", "تنظيف", "خفف", "سرع", "رام", "ذاكره", "تخزين")) {
-            return cleanPhoneAndRam(context, "حسناً، لقد نظفت الذاكرة وحررت {freedMb} ميغابايت، وأنا مستمر في العمل على مدار الساعة.")
+        // Clean RAM
+        if (hasAnyConcept(stemmedWords, cleaned, "نظف", "تنظيف", "خفف", "سرع", "رام", "ذاكره")) {
+            return cleanPhoneAndRam(
+                context,
+                BoyktaUserProfileStore.pickVaried(
+                    "clean_ram",
+                    listOf(
+                        "نظفت الذاكرة وحررت {freedMb} ميغابايت $sal.",
+                        "تم تسريع الهاتف وتحرير {freedMb} ميغابايت من الرام."
+                    )
+                )
+            )
         }
 
         // Flashlight
         if (hasAnyConcept(stemmedWords, cleaned, "فلاش", "مصباح", "كشاف", "ظلمه", "بيل")) {
             toggleTorch(context)
-            return if (torchEnabled) "حسناً، لقد أضأت لك المصباح الخلفي." else "حسناً، لقد أطفأت المصباح الخلفي."
+            return if (torchEnabled) "شغّلت المصباح الخلفي $sal." else "أطفأت المصباح الخلفي $sal."
         }
 
         // Accessibility navigation
         if (hasAnyConcept(stemmedWords, cleaned, "اشعارات", "نوتيفيكاسيون")) {
-            return performAccessibilityNav("NOTIFICATIONS", "حسناً، لقد فتحت لك لوحة الإشعارات.")
+            return performAccessibilityNav("NOTIFICATIONS", "فتحت لوحة الإشعارات $sal.")
         }
         if (hasAnyConcept(stemmedWords, cleaned, "رجوع", "ارجع", "خلف", "وراء") && !cleaned.contains("رساله")) {
-            return performAccessibilityNav("BACK", "تم، لقد عدت إلى الخلف.")
+            return performAccessibilityNav("BACK", "عدت للخلف.")
         }
         if (hasAnyConcept(stemmedWords, cleaned, "رئيسيه", "هوم", "اخرج للشاشه")) {
-            return performAccessibilityNav("HOME", "حسناً، ها هي الشاشة الرئيسية.")
+            return performAccessibilityNav("HOME", "هذه الشاشة الرئيسية $sal.")
         }
         if (hasAnyConcept(stemmedWords, cleaned, "قفل الشاشه", "اقفل الشاشه", "اطفي الشاشه", "سكر الشاشه")) {
-            return performAccessibilityNav("LOCK_SCREEN", "حسناً، سأقفل الشاشة الآن وأبقى مستعداً لندائك.")
+            return performAccessibilityNav("LOCK_SCREEN", "قفلت الشاشة $sal.")
         }
         if (hasAnyConcept(stemmedWords, cleaned, "مفتوحه", "اخر التطبيقات", "تطبيقات الخلفيه")) {
-            return performAccessibilityNav("RECENTS", "حسناً، هذه هي التطبيقات المفتوحة.")
+            return performAccessibilityNav("RECENTS", "إليك التطبيقات المفتوحة.")
         }
 
-        // Volume & Brightness
+        // Volume & Brightness (records last topic for quick follow-up)
         if (hasAnyConcept(stemmedWords, cleaned, "صوت", "فوليم", "الاذاعة")) {
+            BoyktaUserProfileStore.rememberLastTopic(context, "VOLUME")
             val down = hasAnyConcept(stemmedWords, cleaned, "نقص", "اخفض", "وطي", "قلل", "هبط", "ناقص")
-            return adjustVolume(context, if (down) "DOWN" else "UP", if (down) "حسناً، لقد خفضت مستوى الصوت." else "حسناً، لقد رفعت مستوى الصوت.")
+            return adjustVolume(context, if (down) "DOWN" else "UP", if (down) "خفضت مستوى الصوت." else "رفعت مستوى الصوت.")
         }
         if (hasAnyConcept(stemmedWords, cleaned, "سطوع", "اضاءه", "نور الشاشه")) {
+            BoyktaUserProfileStore.rememberLastTopic(context, "BRIGHTNESS")
             val down = hasAnyConcept(stemmedWords, cleaned, "نقص", "اخفض", "قلل", "هبط", "ضعف")
-            return adjustBrightness(context, if (down) "DOWN" else "UP", if (down) "حسناً، لقد خفضت سطوع الشاشة." else "حسناً، لقد رفعت سطوع الشاشة.")
+            return adjustBrightness(context, if (down) "DOWN" else "UP", if (down) "خفضت السطوع $sal." else "رفعت السطوع $sal.")
         }
 
         return null
     }
 
-    private fun tryPersonaReply(cleaned: String, hasLaughter: Boolean): String? {
+    private fun tryPersonaReply(context: Context, cleaned: String, hasLaughter: Boolean): String? {
+        val sal = BoyktaUserProfileStore.salutation(context)
         if (Regex("^(السلام عليكم|سلام|اهلا|مرحبا|صباح الخير|مساء الخير|واش راك|كيفاش راك|كيف حالك|لباس|لاباس)").containsMatchIn(cleaned)) {
-            return "وعليكم السلام ورحمة الله! أنا بخير والحمد لله، ومستعد تماماً لتنفيذ أوامرك في الهاتف."
+            return BoyktaUserProfileStore.pickVaried(
+                "greet_hello",
+                listOf(
+                    "وعليكم السلام $sal، بخير والحمد لله. بماذا أساعدك؟",
+                    "أهلاً $sal، أنا بخير ومستعد لأوامرك.",
+                    "مرحباً $sal، كل الأمور تمام. كيف أخدمك الآن؟"
+                )
+            )
         }
         if (cleaned.contains("يعطيك الصحه") || cleaned.contains("صحيت") || cleaned.contains("شكرا") || cleaned.contains("بارك الله")) {
-            return "على الرحب والسعة، أنا في خدمتك في أي وقت على مدار الساعة."
+            return BoyktaUserProfileStore.pickVaried(
+                "greet_thanks",
+                listOf("العفو $sal، في أي وقت.", "على الرحب والسعة $sal.", "بارك الله فيك $sal.")
+            )
         }
         if (cleaned.contains("نكته") || cleaned.contains("ضحكني")) {
-            return "في أحد الأيام سئل هاتف الذكي لماذا لا تتعب؟ فأجاب لأن معي بويكتا ينظف ذاكرتي ويعمل معي على مدار الساعة."
+            return BoyktaUserProfileStore.pickVaried(
+                "jokes",
+                listOf(
+                    "سُئل الهاتف لماذا لا تتعب؟ قال: لأن بويكتا ينظف ذاكرتي باستمرار.",
+                    "مبرمج نسي هاتفه في الشاحن يوماً كاملاً، فأخبره بويكتا: ارتحتُ أكثر منك."
+                )
+            )
         }
         if (cleaned.contains("شكون انت") || cleaned.contains("من انت") || cleaned.contains("عرفني")) {
-            return "أنا بويكتا، مساعدك الصوتي الشخصي على هاتف غالاكسي إم ثلاثة عشر، أعمل بالكامل بدون إنترنت وأنفذ أوامرك بالعربية الفصحى."
+            return "أنا بويكتا، مساعدك الصوتي الشخصي $sal على غالاكسي إم ثلاثة عشر بدون إنترنت."
         }
         if (cleaned.contains("ماذا تستطيع") || cleaned.contains("واش تقدر") || cleaned.contains("قدراتك")) {
-            return "أستطيع فتح أي تطبيق أو لعبة، التقاط صورة للشاشة، قراءة الساعة والبطارية، الاتصال بجهات الاتصال، وتنظيف الذاكرة بالكامل."
+            return "أفتح أي تطبيق، أقرأ المكالمات والتذكيرات، ألتقط الشاشة، وأحافظ على البطارية والبلوتوث تلقائياً."
         }
         if (hasLaughter && cleaned.length < 18) {
-            return "أدام الله سرورك! إذا احتجت إلى فتح أي تطبيق أو تنفيذ أي أمر فأخبرني فقط."
+            return BoyktaUserProfileStore.pickVaried(
+                "laugh",
+                listOf("أدام الله ابتسامتك $sal.", "دوم الضحكة $sal، بماذا نبدأ؟")
+            )
         }
         return null
     }
@@ -1081,5 +1312,142 @@ object DarijaIntentRouter {
             }
         }
         return null
+    }
+
+    private fun parseAndAddVoiceReminder(context: Context, cleaned: String): String? {
+        val sal = BoyktaUserProfileStore.salutation(context)
+        val now = System.currentTimeMillis()
+        var triggerAt: Long? = null
+        var desc = cleaned
+
+        val minMatch = Regex("بعد\\s+(\\d{1,4})\\s*(?:دقيقه|دقائق|د|ساعه|ساعات)").find(cleaned)
+        if (minMatch != null) {
+            val amount = minMatch.groupValues[1].toLongOrNull() ?: 10L
+            val isHours = minMatch.value.contains("ساع")
+            triggerAt = now + amount * (if (isHours) 3_600_000L else 60_000L)
+            desc = cleaned.replace(minMatch.value, " ")
+        } else {
+            val timeMatch = Regex("(?:على|علي|في|الساعه)?\\s*(\\d{1,2})(?::(\\d{2}))?").find(cleaned)
+            if (timeMatch != null) {
+                val hh = timeMatch.groupValues[1].toIntOrNull()
+                val mm = timeMatch.groupValues[2].toIntOrNull() ?: 0
+                if (hh != null && hh in 0..23 && mm in 0..59) {
+                    val cal = Calendar.getInstance().apply {
+                        set(Calendar.HOUR_OF_DAY, hh)
+                        set(Calendar.MINUTE, mm)
+                        set(Calendar.SECOND, 0)
+                        set(Calendar.MILLISECOND, 0)
+                        if (timeInMillis <= now) add(Calendar.DAY_OF_YEAR, 1)
+                    }
+                    triggerAt = cal.timeInMillis
+                    desc = cleaned.replace(timeMatch.value, " ")
+                }
+            }
+        }
+
+        val cleanDesc = desc
+            .replace(Regex("(فكرني|ذكرني|نبهني|ديرلي تذكير|تذكير|بان|ان|ب|اني|روح)"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        if (triggerAt == null && cleanDesc.length < 3) return null
+
+        val finalTrigger = triggerAt ?: (now + 15 * 60_000L)
+        val finalDesc = cleanDesc.ifEmpty { "تذكير صوتي مجدول" }
+        BoyktaReminderStore.addReminder(context, finalDesc, finalTrigger)
+        val hhMm = SimpleDateFormat("HH:mm", Locale.US).format(Date(finalTrigger))
+        return "حسناً $sal، سأذكرك الساعة $hhMm بـ: $finalDesc."
+    }
+
+    private fun setRingerModeCompat(context: Context, mode: Int, okMsg: String): String {
+        return try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+                mode == AudioManager.RINGER_MODE_SILENT &&
+                !nm.isNotificationPolicyAccessGranted
+            ) {
+                context.startActivity(
+                    Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                )
+                return "يرجى تفعيل إذن عدم الإزعاج لكي أكتم الصوت كلياً."
+            }
+            am.ringerMode = mode
+            okMsg
+        } catch (_: Exception) {
+            "تعذر تغيير وضع الرنين في هذه اللحظة."
+        }
+    }
+
+    private fun sendMediaKey(context: Context, keyCode: Int, reply: String): String {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val now = SystemClock.uptimeMillis()
+        am.dispatchMediaKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0))
+        am.dispatchMediaKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0))
+        return reply
+    }
+
+    private fun getStorageInfoReply(context: Context, sal: String): String {
+        val stat = StatFs(Environment.getDataDirectory().path)
+        val freeGb = (stat.availableBytes / (1024L * 1024L * 1024L)).toInt()
+        val totalGb = (stat.totalBytes / (1024L * 1024L * 1024L)).toInt()
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val mi = ActivityManager.MemoryInfo()
+        am.getMemoryInfo(mi)
+        val freeRamMb = (mi.availMem / (1024L * 1024L)).toInt()
+        return "المساحة الحرة $freeGb غيغابايت من $totalGb، والرام الحرة $freeRamMb ميغابايت $sal."
+    }
+
+    private fun openSearchIntent(
+        context: Context,
+        query: String,
+        youtube: Boolean,
+        maps: Boolean,
+        sal: String
+    ): String {
+        return try {
+            val intent = when {
+                maps -> Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=${Uri.encode(query)}"))
+                youtube -> Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=${Uri.encode(query)}"))
+                else -> Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=${Uri.encode(query)}"))
+            }.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+            context.startActivity(intent)
+            "فتحت البحث عن $query $sal."
+        } catch (_: Exception) {
+            "تعذر فتح البحث الآن $sal."
+        }
+    }
+
+    private fun openSettingsAction(context: Context, action: String, reply: String): String {
+        return try {
+            context.startActivity(Intent(action).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
+            reply
+        } catch (_: Exception) {
+            "تعذر فتح هذا القسم من الإعدادات."
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun toggleBluetoothVoice(context: Context, sal: String): String {
+        val btMgr = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+        val adapter = btMgr?.adapter
+        val permOk = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+        if (adapter != null && permOk && Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            val ok = try { adapter.disable() } catch (_: SecurityException) { false }
+            if (ok) return "أغلقت البلوتوث $sal."
+        }
+        return openBluetoothSettings(context)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun toggleWifiVoice(context: Context, sal: String): String {
+        val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        if (wm != null && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            val ok = try { wm.setWifiEnabled(false) } catch (_: SecurityException) { false }
+            if (ok) return "أغلقت الواي فاي $sal."
+        }
+        return openWifiPanel(context)
     }
 }
