@@ -1077,7 +1077,7 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
             val msg = BoyktaUserProfileStore.pickVaried(
                 "batt_low",
                 listOf(
-                    "تنبيه $sal، البطارية منخفضة عند ${ArabicNumberToWords.numberToWords(pct)} بالمئة. ضع الهاتف في الشاحن.",
+                    "تنبيه $sal، البطارية منخفضة عند ${ArabicNumberToWords.intToArabicWords(pct)} بالمئة. ضع الهاتف في الشاحن.",
                     "$sal، الشحن أوشك على النفاد عند $pct%. يُستحسن توصيل الشاحن الآن."
                 )
             )
@@ -1121,7 +1121,7 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
                 val hasConnectedBt = try {
                     val a2dp = btAdapter.getProfileConnectionState(BluetoothProfile.A2DP) == BluetoothProfile.STATE_CONNECTED
                     val hs = btAdapter.getProfileConnectionState(BluetoothProfile.HEADSET) == BluetoothProfile.STATE_CONNECTED
-                    val gatt = btManager.getConnectedDevices(BluetoothProfile.GATT).isNotEmpty()
+                    val gatt = btManager?.getConnectedDevices(BluetoothProfile.GATT)?.isNotEmpty() == true
                     a2dp || hs || gatt
                 } catch (_: SecurityException) {
                     true
@@ -1162,7 +1162,7 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
         val cm = getSystemService(CONNECTIVITY_SERVICE) as? ConnectivityManager
         if (wifiMgr != null && wifiMgr.isWifiEnabled) {
             val net = cm?.activeNetwork
-            val caps = if (net != null) cm.getNetworkCapabilities(net) else null
+            val caps = if (net != null && cm != null) cm.getNetworkCapabilities(net) else null
             val wifiConnected = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
             if (!wifiConnected) {
                 if (wifiIdleSinceMs == 0L) wifiIdleSinceMs = now

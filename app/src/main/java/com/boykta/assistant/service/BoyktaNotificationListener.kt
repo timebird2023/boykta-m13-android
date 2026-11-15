@@ -71,6 +71,7 @@ class BoyktaNotificationListener : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         if (sbn == null) return
+        val notifKey = sbn.key ?: return
         val pkg = sbn.packageName ?: return
         if (pkg == packageName || pkg !in messagingPackages) return
 
@@ -89,10 +90,10 @@ class BoyktaNotificationListener : NotificationListenerService() {
             return
         }
 
-        pendingChecks.remove(sbn.key)?.let { handler.removeCallbacks(it) }
+        pendingChecks.remove(notifKey)?.let { handler.removeCallbacks(it) }
 
         val checkRunnable = Runnable {
-            pendingChecks.remove(sbn.key)
+            pendingChecks.remove(notifKey)
             if (BoyktaUserProfileStore.isQuietNightHours()) return@Runnable
 
             val now = System.currentTimeMillis()
@@ -124,13 +125,13 @@ class BoyktaNotificationListener : NotificationListenerService() {
             ttsManager?.speak(msg)
         }
 
-        pendingChecks[sbn.key] = checkRunnable
+        pendingChecks[notifKey] = checkRunnable
         handler.postDelayed(checkRunnable, 24_000L)
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
-        if (sbn == null) return
-        pendingChecks.remove(sbn.key)?.let { handler.removeCallbacks(it) }
+        val notifKey = sbn?.key ?: return
+        pendingChecks.remove(notifKey)?.let { handler.removeCallbacks(it) }
     }
 
     override fun onDestroy() {
