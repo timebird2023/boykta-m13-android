@@ -24,7 +24,7 @@ class CallAnnouncerReceiver : BroadcastReceiver() {
                 "شخص ما"
             }
             val tts = MaleTtsManager(context)
-            tts.speak("خويا، $callerName راه يعيطلك")
+            tts.speak("تنبيه، المتصل هو $callerName.")
         }
     }
 

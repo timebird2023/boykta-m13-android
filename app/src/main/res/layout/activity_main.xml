@@ -54,7 +54,7 @@
             android:layout_marginTop="10dp"
             android:background="#451A03"
             android:padding="12dp"
-            android:text="لتسمع بويكتا يتكلم بالعربية بصوت ذكوري بدون الحاجة لصوت الهاتف الإنجليزي: اضغط الزر بالأسفل لتحميل «صوت بويكتا العربي الذكوري المدمج (64MB)»."
+            android:text="لتسمع بويكتا ينطق بالعربية الفصحى بوضوح تام: اضغط على زر «تحميل الصوت الفصيح عالي الدقة (Miro V2 · 64MB)»."
             android:textColor="#FDE68A"
             android:textSize="13sp"
             android:visibility="gone" />
@@ -96,12 +96,32 @@
             android:textStyle="bold" />
 
         <Button
-            android:id="@+id/btnDownloadKareemVoice"
+            android:id="@+id/btnDownloadMiroVoice"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:backgroundTint="#059669"
-            android:text="تحميل صوت بويكتا العربي الذكوري المدمج (64MB) — يتكلم بلا هاتف"
+            android:text="✨ تحميل الصوت الفصيح عالي الدقة (Miro V2 · 64MB — واضح 100%)"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnToggleTtsSource"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:backgroundTint="#1E293B"
+            android:text="🔊 مصدر النطق: صوت بويكتا المدمج الفصيح (اضغط للتبديل لصوت النظام)"
+            android:textColor="#E2E8F0"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/btnDownloadMoonshine"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:backgroundTint="#7C3AED"
+            android:text="🧠 تحميل محرك السمع الذكي Moonshine (114MB — يفهمك بلا أخطاء)"
             android:textColor="#FFFFFF"
             android:textStyle="bold" />
 
@@ -110,14 +130,14 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:text="تحميل حزمة السمع الفصحى الدقيقة (318MB) إلى SD" />
+            android:text="تحميل حزمة Vosk الفصحى الإضافية (318MB)" />
 
         <Button
             android:id="@+id/btnDownloadDarija"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:text="تحميل حزمة السمع الدارجة الجزائرية (158MB) إلى SD" />
+            android:text="تحميل حزمة Vosk الدارجة الإضافية (158MB)" />
 
         <ProgressBar
             android:id="@+id/progressDownload"
@@ -195,7 +215,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="14dp"
-            android:text="تجربة سريعة لأوامر بويكتا (حتى وسط الضحك):"
+            android:text="تجربة سريعة لأوامر بويكتا الفورية:"
             android:textColor="#94A3B8"
             android:textSize="13sp" />
 
@@ -216,22 +236,22 @@
                 android:textSize="12sp" />
 
             <Button
-                android:id="@+id/chipCamera"
+                android:id="@+id/chipScreenshot"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="4dp"
                 android:layout_weight="1"
                 android:maxLines="1"
-                android:text="الكاميرا"
+                android:text="لقطة شاشة"
                 android:textSize="12sp" />
 
             <Button
-                android:id="@+id/chipNotifs"
+                android:id="@+id/chipTime"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:maxLines="1"
-                android:text="الإشعارات"
+                android:text="الساعة الآن"
                 android:textSize="12sp" />
         </LinearLayout>
 
@@ -248,7 +268,7 @@
                 android:layout_marginEnd="4dp"
                 android:layout_weight="1"
                 android:maxLines="1"
-                android:text="نضف الرام"
+                android:text="نظف الرام"
                 android:textSize="12sp" />
 
             <Button
@@ -277,7 +297,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
             android:background="#111827"
-            android:hint="جرب: بويكتا افتح فري فاير هههه خويا اسمع"
+            android:hint="جرب: بويكتا شحال ساعة، أو دير لقطة شاشة"
             android:padding="12dp"
             android:textColor="#F8FAFC"
             android:textColorHint="#64748B" />
@@ -287,7 +307,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="تنفيذ والرد بالصوت العربي" />
+            android:text="تنفيذ والرد بالعربية الفصحى" />
 
         <TextView
             android:id="@+id/tvLog"
@@ -315,7 +335,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
             android:background="#111827"
-            android:hint="العبارة المنطوقة (مثلاً: كيفاش الجو)"
+            android:hint="العبارة المنطوقة (مثلاً: كيف حالك)"
             android:padding="10dp"
             android:textColor="#F8FAFC"
             android:textColorHint="#64748B" />
@@ -326,7 +346,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
             android:background="#111827"
-            android:hint="رد بويكتا الذكوري بالعربية"
+            android:hint="رد بويكتا بالعربية الفصحى"
             android:padding="10dp"
             android:textColor="#F8FAFC"
             android:textColorHint="#64748B" />

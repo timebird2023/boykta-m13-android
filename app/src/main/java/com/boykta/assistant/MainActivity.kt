@@ -45,7 +45,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var etCommandTest: EditText
     private lateinit var etCustomTrigger: EditText
     private lateinit var etCustomReply: EditText
-    private lateinit var btnDownloadKareemVoice: Button
+    private lateinit var btnDownloadMiroVoice: Button
+    private lateinit var btnToggleTtsSource: Button
+    private lateinit var btnDownloadMoonshine: Button
     private lateinit var btnDownloadFusha: Button
     private lateinit var btnDownloadDarija: Button
     private lateinit var btnTeachWakeWord: Button
@@ -80,13 +82,13 @@ class MainActivity : AppCompatActivity() {
                 }
                 BoyktaEvents.TYPE_WAKE -> {
                     robotView.setMood(BoyktaRobotView.Mood.LISTENING)
-                    tvLiveMic.text = "تم التقاط نداء بويكتا! راني نسمع فيك خويا..."
-                    appendLog("النظام", "سمعت كلمة بويكتا — راني واجد لأمرك.")
+                    tvLiveMic.text = "تم التقاط نداء بويكتا! أنا أسمعك الآن..."
+                    appendLog("النظام", "تم سماع كلمة بويكتا — جاهز لتنفيذ أمرك.")
                 }
                 BoyktaEvents.TYPE_LEARNED_WAKE -> {
                     robotView.setMood(BoyktaRobotView.Mood.HAPPY)
                     tvLiveMic.text = "تم حفظ نطقك لكلمة بويكتا: «$text» ✓"
-                    appendLog("النظام", "تم تدريب بويكتا على نطقك الشخصي: «$text» — سيستجيب فوراً الآن.")
+                    appendLog("النظام", "تم تدريب بويكتا على نطقك الشخصي: «$text».")
                     updateStatusUi()
                 }
                 BoyktaEvents.TYPE_COMMAND -> {
@@ -117,7 +119,9 @@ class MainActivity : AppCompatActivity() {
         etCommandTest = findViewById(R.id.etCommandTest)
         etCustomTrigger = findViewById(R.id.etCustomTrigger)
         etCustomReply = findViewById(R.id.etCustomReply)
-        btnDownloadKareemVoice = findViewById(R.id.btnDownloadKareemVoice)
+        btnDownloadMiroVoice = findViewById(R.id.btnDownloadMiroVoice)
+        btnToggleTtsSource = findViewById(R.id.btnToggleTtsSource)
+        btnDownloadMoonshine = findViewById(R.id.btnDownloadMoonshine)
         btnDownloadFusha = findViewById(R.id.btnDownloadFusha)
         btnDownloadDarija = findViewById(R.id.btnDownloadDarija)
         btnTeachWakeWord = findViewById(R.id.btnTeachWakeWord)
@@ -142,7 +146,7 @@ class MainActivity : AppCompatActivity() {
 
         robotView.setOnClickListener {
             robotView.setMood(BoyktaRobotView.Mood.HAPPY)
-            val greet = "أهلا خويا العزيز! أنا بويكتا، قولي برك واش تحب نديرلك في الهاتف."
+            val greet = "أهلاً بك، أنا بويكتا. أخبرني بما تريد تنفيذه في الهاتف."
             appendLog("بويكتا", greet)
             ttsManager.speak(greet)
         }
@@ -190,12 +194,12 @@ class MainActivity : AppCompatActivity() {
                     Manifest.permission.RECORD_AUDIO
                 ) != PackageManager.PERMISSION_GRANTED
             ) {
-                appendLog("النظام", "اقبل إذن الميكروفون أولاً لتعليم بويكتا صوتك.")
+                appendLog("النظام", "يرجى الموافقة على إذن الميكروفون أولاً.")
                 requestRequiredPermissions()
                 return@setOnClickListener
             }
             robotView.setMood(BoyktaRobotView.Mood.LISTENING)
-            tvLiveMic.text = "🎯 قل كلمة «بويكتا» بصوتك الطبيعي الآن حتى أحفظ نطقك للأبد..."
+            tvLiveMic.text = "🎯 قل كلمة «بويكتا» بصوتك الطبيعي الآن حتى أحفظ نطقك..."
             val teachIntent = Intent(this, BoyktaBackgroundService::class.java).apply {
                 action = BoyktaEvents.ACTION_TEACH_WAKE_START
             }
@@ -206,8 +210,27 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        btnDownloadKareemVoice.setOnClickListener {
-            startOfflineModelDownload(SdCardModelLocator.PACK_TTS_KAREEM)
+        btnDownloadMiroVoice.setOnClickListener {
+            startOfflineModelDownload(SdCardModelLocator.PACK_TTS_MIRO)
+        }
+
+        btnToggleTtsSource.setOnClickListener {
+            val next = !SdCardModelLocator.getPreferSystemTts(this)
+            SdCardModelLocator.setPreferSystemTts(this, next)
+            updateStatusUi()
+            val msg = if (next && ttsManager.isSystemArabicAvailable()) {
+                "تم التحويل إلى صوت النظام العربي."
+            } else if (next) {
+                "صوت النظام العربي غير متوفر على الهاتف، سأستخدم الصوت الفصيح المدمج."
+            } else {
+                "تم تفعيل صوت بويكتا الفصيح المدمج عالي الدقة."
+            }
+            appendLog("النظام", msg)
+            ttsManager.speak(msg)
+        }
+
+        btnDownloadMoonshine.setOnClickListener {
+            startOfflineModelDownload(SdCardModelLocator.PACK_MOONSHINE_AR)
         }
 
         btnDownloadFusha.setOnClickListener {
@@ -237,21 +260,21 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        findViewById<Button>(R.id.chipScreenshot).setOnClickListener {
+            executeAndSpeak("بويكتا دير لقطة شاشة")
+        }
+        findViewById<Button>(R.id.chipTime).setOnClickListener {
+            executeAndSpeak("بويكتا شحال ساعة")
+        }
         findViewById<Button>(R.id.chipFreeFire).setOnClickListener {
-            executeAndSpeak("بويكتا افتح فري فاير هههه خويا")
-        }
-        findViewById<Button>(R.id.chipCamera).setOnClickListener {
-            executeAndSpeak("بويكتا افتح الكاميرا")
-        }
-        findViewById<Button>(R.id.chipNotifs).setOnClickListener {
-            executeAndSpeak("بويكتا هبط الإشعارات")
+            executeAndSpeak("بويكتا افتح فري فاير")
         }
         findViewById<Button>(R.id.chipCleanRam).setOnClickListener {
             robotView.setMood(BoyktaRobotView.Mood.CLEANING)
-            executeAndSpeak("بويكتا نضف الهاتف والرام")
+            executeAndSpeak("بويكتا نظف الرام والهاتف")
         }
         findViewById<Button>(R.id.chipBattery).setOnClickListener {
-            executeAndSpeak("بويكتا شحال الباتري")
+            executeAndSpeak("بويكتا كم نسبة الشحن")
         }
         findViewById<Button>(R.id.chipTestWake).setOnClickListener {
             AudioChimes.playWakeChime(this)
@@ -264,7 +287,7 @@ class MainActivity : AppCompatActivity() {
             } else {
                 startService(wakeIntent)
             }
-            appendLog("النظام", "تم فتح نافذة الاستماع السريع (OK Google style) لمدة 10 ثوانٍ.")
+            appendLog("النظام", "تم فتح نافذة الاستماع السريع لمدة عشر ثوانٍ.")
         }
 
         findViewById<Button>(R.id.btnSaveCustomRule).setOnClickListener {
@@ -275,7 +298,7 @@ class MainActivity : AppCompatActivity() {
                 etCustomTrigger.setText("")
                 etCustomReply.setText("")
                 appendLog("النظام", "تم حفظ الأمر المخصص: $trig")
-                ttsManager.speak("تم خويا، حفظتلك هاد الأمر الجديد.")
+                ttsManager.speak("حسناً، تم حفظ الأمر الجديد.")
             }
         }
 
@@ -286,7 +309,7 @@ class MainActivity : AppCompatActivity() {
     private fun requestPersistentStorageAccess() {
         if (SdCardModelLocator.hasAllFilesPermission(this)) {
             migrateModelsIfPermitted()
-            appendLog("النظام", "مجلد الحفظ الدائم (/BoyktaModels) مفعل بالفعل — لن تفقد الحزم أبداً عند التحديث.")
+            appendLog("النظام", "مجلد الحفظ الدائم (/BoyktaModels) مفعل بالفعل.")
             updateStatusUi()
             return
         }
@@ -310,7 +333,7 @@ class MainActivity : AppCompatActivity() {
             val copied = SdCardModelLocator.migrateAppPrivateModelsToPersistentStorage(this)
             if (copied > 0) {
                 runOnUiThread {
-                    appendLog("النظام", "تم نسخ $copied حزمة إلى المجلد الدائم /BoyktaModels لحمايتها من المسح.")
+                    appendLog("النظام", "تم حفظ $copied حزم في المجلد الدائم لحمايتها عند التحديث.")
                     updateStatusUi()
                 }
             }
@@ -331,7 +354,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setDownloadButtonsEnabled(enabled: Boolean) {
-        btnDownloadKareemVoice.isEnabled = enabled
+        btnDownloadMiroVoice.isEnabled = enabled
+        btnDownloadMoonshine.isEnabled = enabled
         btnDownloadFusha.isEnabled = enabled
         btnDownloadDarija.isEnabled = enabled
     }
@@ -343,11 +367,13 @@ class MainActivity : AppCompatActivity() {
         progressDownload.progress = 0
 
         val packLabel = when (packId) {
-            SdCardModelLocator.PACK_TTS_KAREEM -> "صوت بويكتا العربي الذكوري المدمج (Kareem 64MB)"
-            SdCardModelLocator.PACK_FUSHA_MGB2 -> "حزمة السمع الفصحى الدقيقة (318MB)"
-            else -> "حزمة السمع الدارجة الجزائرية/المغاربية (158MB)"
+            SdCardModelLocator.PACK_TTS_MIRO -> "صوت بويكتا الفصيح عالي الدقة (Miro V2 High)"
+            SdCardModelLocator.PACK_TTS_KAREEM -> "صوت بويكتا المدمج (Kareem)"
+            SdCardModelLocator.PACK_MOONSHINE_AR -> "محرك السمع العصبي الذكي (Moonshine Arabic)"
+            SdCardModelLocator.PACK_FUSHA_MGB2 -> "حزمة الفصحى (Vosk 318MB)"
+            else -> "حزمة الدارجة (Vosk 158MB)"
         }
-        tvDownloadStatus.text = "جاري تحميل $packLabel إلى الذاكرة الدائمة..."
+        tvDownloadStatus.text = "جاري تحميل $packLabel..."
 
         ModelDownloader.downloadAndExtractArabicModel(
             context = this,
@@ -363,7 +389,7 @@ class MainActivity : AppCompatActivity() {
                     setDownloadButtonsEnabled(true)
                     tvDownloadStatus.text = message
                     if (success) {
-                        if (packId != SdCardModelLocator.PACK_TTS_KAREEM) {
+                        if (packId != SdCardModelLocator.PACK_TTS_MIRO && packId != SdCardModelLocator.PACK_TTS_KAREEM) {
                             SdCardModelLocator.setSelectedPack(this, packId)
                         } else {
                             ttsManager.reloadInAppVoice()
@@ -372,7 +398,7 @@ class MainActivity : AppCompatActivity() {
                         robotView.setMood(BoyktaRobotView.Mood.HAPPY)
                         AudioChimes.playConfirmChime()
                         appendLog("النظام", "تم تثبيت $packLabel بنجاح وتفعيله مباشرة.")
-                        ttsManager.speak("أبشر خويا، تم تثبيت $packLabel بنجاح، وراني خدام بالصوت العربي الآن.")
+                        ttsManager.speak("حسناً، تم تثبيت الحزمة الجديدة بنجاح وأنا جاهز للعمل.")
                     }
                     updateStatusUi()
                 }
@@ -440,14 +466,15 @@ class MainActivity : AppCompatActivity() {
                 Manifest.permission.RECORD_AUDIO
             ) != PackageManager.PERMISSION_GRANTED
         ) {
-            appendLog("النظام", "يرجى الموافقة على إذن الميكروفون أولاً لتشغيل خدمة بويكتا 24/24.")
-            ttsManager.speak("خويا، اقبل إذن الميكروفون أولاً باش نقدر نسمعك 24 على 24.")
+            appendLog("النظام", "يرجى الموافقة على إذن الميكروفون أولاً لتشغيل الخدمة.")
+            ttsManager.speak("يرجى تفعيل إذن الميكروفون أولاً حتى أتمكن من سماعك.")
             requestRequiredPermissions()
             return
         }
 
         val hasAnyEarModel =
-            SdCardModelLocator.isPackInstalled(this, SdCardModelLocator.PACK_FUSHA_MGB2) ||
+            SdCardModelLocator.isPackInstalled(this, SdCardModelLocator.PACK_MOONSHINE_AR) ||
+                SdCardModelLocator.isPackInstalled(this, SdCardModelLocator.PACK_FUSHA_MGB2) ||
                 SdCardModelLocator.isPackInstalled(this, SdCardModelLocator.PACK_DARIJA_TN)
 
         val intent = Intent(this, BoyktaBackgroundService::class.java).apply {
@@ -461,13 +488,13 @@ class MainActivity : AppCompatActivity() {
 
         if (!hasAnyEarModel) {
             robotView.setMood(BoyktaRobotView.Mood.ALERT)
-            tvLiveMic.text = "تنبيه: الميكروفون ينتظر تحميل حزمة الفصحى (318MB) أو الدارجة (158MB) لسماع كلمة بويكتا!"
-            appendLog("النظام", "تم تشغيل الخدمة، لكن يرجى تحميل حزمة الدارجة أو الفصحى ليسمع الميكروفون كلمة بويكتا بدون إنترنت.")
+            tvLiveMic.text = "تنبيه: حمل محرك السمع الذكي Moonshine (114MB) حتى يفهمك بويكتا بدقة عالية!"
+            appendLog("النظام", "تم تشغيل الخدمة، يرجى تحميل محرك السمع الذكي Moonshine (114MB).")
         } else {
             robotView.setMood(BoyktaRobotView.Mood.LISTENING)
             AudioChimes.playWakeChime(this)
-            ttsManager.speak("السلام خويا، بويكتا راهو خدام 24 على 24 ساعة. عيطلي غير باسمي بويكتا.")
-            appendLog("النظام", "تم تشغيل مستشعر كلمة بويكتا 24/24 — قل بويكتا الآن.")
+            ttsManager.speak("أهلاً بك، بويكتا يعمل الآن على مدار الساعة. نادني باسمي بويكتا في أي وقت.")
+            appendLog("النظام", "تم تشغيل مستشعر كلمة بويكتا على مدار الساعة.")
         }
     }
 
@@ -484,9 +511,13 @@ class MainActivity : AppCompatActivity() {
         val writeOk = Settings.System.canWrite(this)
         val overlayOk = Settings.canDrawOverlays(this)
         val persistentOk = SdCardModelLocator.hasAllFilesPermission(this)
+
+        val moonshineReady = SdCardModelLocator.isPackInstalled(this, SdCardModelLocator.PACK_MOONSHINE_AR)
         val fushaReady = SdCardModelLocator.isPackInstalled(this, SdCardModelLocator.PACK_FUSHA_MGB2)
         val darijaReady = SdCardModelLocator.isPackInstalled(this, SdCardModelLocator.PACK_DARIJA_TN)
+        val miroReady = SdCardModelLocator.isMiroTtsInstalled(this)
         val kareemReady = SdCardModelLocator.isKareemTtsInstalled(this)
+        val preferSysTts = SdCardModelLocator.getPreferSystemTts(this)
         val customWakeCount = CustomWakeStore.getPhrases(this).size
 
         val bm = getSystemService(BATTERY_SERVICE) as BatteryManager
@@ -498,32 +529,54 @@ class MainActivity : AppCompatActivity() {
         val freeRamMb = mi.availMem / (1024 * 1024)
 
         val arabicTtsReady = ttsManager.isArabicReady()
-        tvTtsWarning.visibility = if (kareemReady) View.GONE else View.VISIBLE
+        tvTtsWarning.visibility = if (miroReady) View.GONE else View.VISIBLE
 
-        btnDownloadKareemVoice.text = if (kareemReady) {
-            "✓ صوت بويكتا العربي الذكوري المدمج جاهز (Kareem)"
+        btnDownloadMiroVoice.text = if (miroReady) {
+            "✓ الصوت الفصيح عالي الدقة جاهز (Miro V2 High)"
+        } else if (kareemReady) {
+            "⬆️ ترقية الصوت إلى الفصيح عالي الدقة (Miro V2 · 64MB — أوضح بكثير)"
         } else {
-            "تحميل صوت بويكتا العربي الذكوري المدمج (64MB) — يتكلم بلا هاتف"
+            "✨ تحميل الصوت الفصيح عالي الدقة (Miro V2 · 64MB — واضح 100%)"
+        }
+
+        btnDownloadMoonshine.text = if (moonshineReady) {
+            "✓ محرك السمع العصبي الذكي جاهز (Moonshine Arabic)"
+        } else {
+            "🧠 تحميل محرك السمع الذكي Moonshine (114MB — يفهمك بلا أخطاء)"
+        }
+
+        btnToggleTtsSource.text = if (preferSysTts) {
+            "🔊 مصدر النطق: صوت النظام العربي (اضغط للتبديل إلى المدمج)"
+        } else {
+            "🔊 مصدر النطق: صوت بويكتا المدمج الفصيح (اضغط للتبديل لصوت النظام)"
         }
 
         btnStoragePermission.text = if (persistentOk) {
-            "✓ الحفظ الدائم مفعّل (/BoyktaModels) — محمية من المسح"
+            "✓ الحفظ الدائم مفعّل (/BoyktaModels)"
         } else {
-            "💾 حفظ الحزم بشكل دائم (/BoyktaModels) حتى لا تعيد التحميل"
+            "💾 تفعيل الحفظ الدائم (/BoyktaModels) لحماية الحزم"
         }
 
         btnTeachWakeWord.text = if (customWakeCount > 0) {
-            "🎯 علّمني نطقي لكلمة بويكتا (محفوظ $customWakeCount نطق لصوتك)"
+            "🎯 علّمني نطقي لكلمة بويكتا (محفوظ $customWakeCount)"
         } else {
             "🎯 علّمني نطقي لكلمة بويكتا (اضغط وقل «بويكتا» الآن)"
         }
 
+        val voiceStatusStr = when {
+            preferSysTts && ttsManager.isSystemArabicAvailable() -> "صوت النظام العربي"
+            miroReady -> "Miro V2 الفصيح عالي الدقة (أوفلاين)"
+            kareemReady -> "Kareem القديم (ينصح بالترقية إلى Miro V2)"
+            arabicTtsReady -> "صوت النظام العربي"
+            else -> "غير محمل (حمل Miro V2)"
+        }
+
         tvStatus.text = buildString {
             appendLine("حالة Galaxy M13 (armeabi-v7a) — الشحن: $batteryPct% · الرام الحرة: ${freeRamMb}MB")
-            appendLine("• الفم (صوت بويكتا العربي المدمج Kareem): ${if (kareemReady) "مثبت ويعمل أوفلاين" else if (arabicTtsReady) "يعمل بصوت النظام" else "غير محمل (اضغط زر التحميل الأخضر)"}")
-            appendLine("• الأذن (الفهم 24/24): الفصحى ${if (fushaReady) "✓" else "✗"} · الدارجة ${if (darijaReady) "✓" else "✗"} · نطقك الخاص: $customWakeCount")
-            appendLine("• المايك: ${if (micOk) "✓" else "✗"} · التحكم الشامل: ${if (accOk) "✓" else "✗"} · النافذة: ${if (overlayOk) "✓" else "✗"} · الحفظ الدائم: ${if (persistentOk) "✓" else "✗"}")
-            append("• السطوع: ${if (writeOk) "✓" else "✗"} · جهات الاتصال: ${if (contactsOk) "✓" else "✗"}")
+            appendLine("• النطق (الفصحى): $voiceStatusStr")
+            appendLine("• السمع الذكي: Moonshine ${if (moonshineReady) "✓ (مفعّل)" else "✗"} · الفصحى ${if (fushaReady) "✓" else "✗"} · الدارجة ${if (darijaReady) "✓" else "✗"}")
+            appendLine("• المايك: ${if (micOk) "✓" else "✗"} · التحكم الشامل: ${if (accOk) "✓" else "✗"} · النافذة: ${if (overlayOk) "✓" else "✗"} · الدائم: ${if (persistentOk) "✓" else "✗"}")
+            append("• السطوع: ${if (writeOk) "✓" else "✗"} · جهات الاتصال: ${if (contactsOk) "✓" else "✗"} · نطقك الخاص: $customWakeCount")
         }
     }
 

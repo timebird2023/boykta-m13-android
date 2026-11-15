@@ -3,6 +3,7 @@ package com.boykta.assistant.audio
 import android.content.Context
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import com.boykta.assistant.storage.SdCardModelLocator
 import java.util.Locale
 
 class MaleTtsManager(
@@ -57,8 +58,8 @@ class MaleTtsManager(
     }
 
     fun refreshArabicCheck() {
-        val localeDz = Locale("ar", "DZ")
-        var res = sysTts?.setLanguage(localeDz) ?: TextToSpeech.LANG_NOT_SUPPORTED
+        val localeSa = Locale("ar", "SA")
+        var res = sysTts?.setLanguage(localeSa) ?: TextToSpeech.LANG_NOT_SUPPORTED
         if (res == TextToSpeech.LANG_MISSING_DATA || res == TextToSpeech.LANG_NOT_SUPPORTED) {
             res = sysTts?.setLanguage(Locale("ar")) ?: TextToSpeech.LANG_NOT_SUPPORTED
         }
@@ -76,8 +77,8 @@ class MaleTtsManager(
         if (maleVoice != null) {
             sysTts?.voice = maleVoice
         }
-        sysTts?.setPitch(0.84f)
-        sysTts?.setSpeechRate(0.95f)
+        sysTts?.setPitch(0.88f)
+        sysTts?.setSpeechRate(0.96f)
     }
 
     fun reloadInAppVoice() {
@@ -87,35 +88,32 @@ class MaleTtsManager(
 
     fun isInAppVoiceInstalled(): Boolean = InAppArabicTtsEngine.isInstalled(appContext)
 
+    fun isSystemArabicAvailable(): Boolean = sysReady && sysArabicAvailable
+
     fun isArabicReady(): Boolean = InAppArabicTtsEngine.isInstalled(appContext) || sysArabicAvailable
 
-    private fun enforceArabicWords(input: String): String {
-        return input
-            .replace("Free Fire", "فري فاير", ignoreCase = true)
-            .replace("Facebook", "فيسبوك", ignoreCase = true)
-            .replace("WhatsApp", "واتساب", ignoreCase = true)
-            .replace("YouTube", "يوتيوب", ignoreCase = true)
-            .replace("Instagram", "انستغرام", ignoreCase = true)
-            .replace("TikTok", "تيك توك", ignoreCase = true)
-            .replace("Accessibility", "التحكم الشامل", ignoreCase = true)
-            .replace("Write Settings", "تعديل الإعدادات", ignoreCase = true)
-            .replace("RAM", "الرام", ignoreCase = true)
-            .replace("MB", "ميغا", ignoreCase = true)
-    }
-
     fun speak(text: String) {
-        val cleanText = if (STRICT_ARABIC_ONLY) enforceArabicWords(text) else text
+        val cleanText = if (STRICT_ARABIC_ONLY) ArabicNumberToWords.prepareForFushaTts(text) else text
+        val preferSystem = SdCardModelLocator.getPreferSystemTts(appContext)
 
-        // 1. Priority: Self-contained In-App Sherpa-ONNX Male Arabic Voice (Kareem Singleton)
-        if (InAppArabicTtsEngine.isInstalled(appContext)) {
-            InAppArabicTtsEngine.speakAsync(
-                context = appContext,
-                arabicText = cleanText
+        if (preferSystem && sysReady && sysArabicAvailable) {
+            sysTts?.speak(
+                cleanText,
+                TextToSpeech.QUEUE_FLUSH,
+                null,
+                "boykta_${System.currentTimeMillis()}"
             )
             return
         }
 
-        // 2. Fallback: System Android TTS only if Arabic pack is installed on phone
+        if (InAppArabicTtsEngine.isInstalled(appContext)) {
+            InAppArabicTtsEngine.speakAsync(
+                context = appContext,
+                arabicText = text
+            )
+            return
+        }
+
         if (sysReady && sysArabicAvailable) {
             sysTts?.speak(
                 cleanText,
@@ -126,7 +124,6 @@ class MaleTtsManager(
             return
         }
 
-        // 3. Never speak English! Play crisp confirmation chime while notifying UI to download Kareem 64MB
         onSpeakingChanged?.invoke(true)
         AudioChimes.playConfirmChime()
         Thread {

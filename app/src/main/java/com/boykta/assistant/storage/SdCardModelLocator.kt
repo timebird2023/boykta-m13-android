@@ -7,13 +7,16 @@ import java.io.File
 
 object SdCardModelLocator {
 
+    const val PACK_MOONSHINE_AR = "moonshine-ar-base"
     const val PACK_FUSHA_MGB2 = "fusha-mgb2"
     const val PACK_DARIJA_TN = "darija-tn"
+    const val PACK_TTS_MIRO = "tts-miro-ar"
     const val PACK_TTS_KAREEM = "tts-kareem-ar"
 
     private const val PREF_NAME = "boykta_voice_pack_prefs"
     private const val KEY_SELECTED_PACK = "selected_pack"
-    private const val DEFAULT_PACK = "fusha-mgb2"
+    private const val KEY_PREFER_SYSTEM_TTS = "prefer_system_tts"
+    private const val DEFAULT_PACK = "moonshine-ar-base"
 
     fun hasAllFilesPermission(context: Context): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -29,6 +32,8 @@ object SdCardModelLocator {
 
     fun getFolderNameForPack(packId: String): String {
         return when (packId) {
+            PACK_MOONSHINE_AR -> "moonshine-ar-base"
+            PACK_TTS_MIRO -> "tts-ar-miro"
             PACK_TTS_KAREEM -> "tts-ar-kareem"
             PACK_DARIJA_TN -> "vosk-model-ar-darija"
             else -> "vosk-model-ar-fusha"
@@ -47,6 +52,18 @@ object SdCardModelLocator {
             .apply()
     }
 
+    fun getPreferSystemTts(context: Context): Boolean {
+        return context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_PREFER_SYSTEM_TTS, false)
+    }
+
+    fun setPreferSystemTts(context: Context, prefer: Boolean) {
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_PREFER_SYSTEM_TTS, prefer)
+            .apply()
+    }
+
     fun getPreferredStorageBaseDir(context: Context): File {
         if (hasAllFilesPermission(context)) {
             val persistent = getPersistentPublicRoot()
@@ -59,33 +76,82 @@ object SdCardModelLocator {
     }
 
     fun isPackInstalled(context: Context, packId: String): Boolean {
-        return if (packId == PACK_TTS_KAREEM) {
-            findKareemTtsDir(context) != null
-        } else {
-            findModelDirForPack(context, packId) != null
+        return when (packId) {
+            PACK_TTS_MIRO -> findMiroTtsDir(context) != null
+            PACK_TTS_KAREEM -> findKareemTtsDir(context) != null
+            PACK_MOONSHINE_AR -> findMoonshineModelDir(context) != null
+            else -> findModelDirForPack(context, packId) != null
         }
     }
 
+    fun isMiroTtsInstalled(context: Context): Boolean = findMiroTtsDir(context) != null
+
     fun isKareemTtsInstalled(context: Context): Boolean = findKareemTtsDir(context) != null
 
-    fun findKareemTtsDir(context: Context): File? {
-        val folderName = getFolderNameForPack(PACK_TTS_KAREEM)
-        val candidates = buildCandidates(context, folderName)
+    fun findBestOfflineTtsDir(context: Context): File? {
+        return findMiroTtsDir(context) ?: findKareemTtsDir(context)
+    }
 
+    fun findVitsOnnxFile(dir: File): File? {
+        val preferredNames = listOf(
+            "ar_JO-SA_miro_V2-high.onnx",
+            "ar_JO-kareem-medium.onnx",
+            "ar_JO-kareem-low.onnx"
+        )
+        for (name in preferredNames) {
+            val f = File(dir, name)
+            if (f.exists()) return f
+        }
+        return dir.listFiles()?.firstOrNull { it.isFile && it.name.endsWith(".onnx") }
+    }
+
+    fun findMiroTtsDir(context: Context): File? {
+        val folderName = getFolderNameForPack(PACK_TTS_MIRO)
+        val candidates = buildCandidates(context, folderName)
         for (dir in candidates) {
-            if (isValidKareemDir(dir)) return dir
-            val nested = dir.listFiles()?.firstOrNull { it.isDirectory && isValidKareemDir(it) }
+            if (isValidVitsTtsDir(dir)) return dir
+            val nested = dir.listFiles()?.firstOrNull { it.isDirectory && isValidVitsTtsDir(it) }
             if (nested != null) return nested
         }
         return null
     }
 
-    private fun isValidKareemDir(dir: File): Boolean {
+    fun findKareemTtsDir(context: Context): File? {
+        val folderName = getFolderNameForPack(PACK_TTS_KAREEM)
+        val candidates = buildCandidates(context, folderName)
+        for (dir in candidates) {
+            if (isValidVitsTtsDir(dir)) return dir
+            val nested = dir.listFiles()?.firstOrNull { it.isDirectory && isValidVitsTtsDir(it) }
+            if (nested != null) return nested
+        }
+        return null
+    }
+
+    private fun isValidVitsTtsDir(dir: File): Boolean {
         return dir.exists() &&
             dir.isDirectory &&
-            File(dir, "ar_JO-kareem-low.onnx").exists() &&
+            findVitsOnnxFile(dir) != null &&
             File(dir, "tokens.txt").exists() &&
             File(dir, "espeak-ng-data").exists()
+    }
+
+    fun findMoonshineModelDir(context: Context): File? {
+        val folderName = getFolderNameForPack(PACK_MOONSHINE_AR)
+        val candidates = buildCandidates(context, folderName)
+        for (dir in candidates) {
+            if (isValidMoonshineDir(dir)) return dir
+            val nested = dir.listFiles()?.firstOrNull { it.isDirectory && isValidMoonshineDir(it) }
+            if (nested != null) return nested
+        }
+        return null
+    }
+
+    private fun isValidMoonshineDir(dir: File): Boolean {
+        return dir.exists() &&
+            dir.isDirectory &&
+            File(dir, "encoder_model.ort").exists() &&
+            File(dir, "decoder_model_merged.ort").exists() &&
+            File(dir, "tokens.txt").exists()
     }
 
     private fun findModelDirForPack(context: Context, packId: String): File? {
@@ -124,13 +190,31 @@ object SdCardModelLocator {
         val persistentModelsRoot = File(getPersistentPublicRoot(), "models").apply { mkdirs() }
         var copiedPacks = 0
 
+        val miroSrc = findMiroTtsDir(context)
+        val miroDst = File(persistentModelsRoot, getFolderNameForPack(PACK_TTS_MIRO))
+        if (miroSrc != null &&
+            miroSrc.canonicalPath != miroDst.canonicalPath &&
+            !isValidVitsTtsDir(miroDst)
+        ) {
+            if (copyDirRecursively(miroSrc, miroDst)) copiedPacks++
+        }
+
         val kareemSrc = findKareemTtsDir(context)
         val kareemDst = File(persistentModelsRoot, getFolderNameForPack(PACK_TTS_KAREEM))
         if (kareemSrc != null &&
             kareemSrc.canonicalPath != kareemDst.canonicalPath &&
-            !isValidKareemDir(kareemDst)
+            !isValidVitsTtsDir(kareemDst)
         ) {
             if (copyDirRecursively(kareemSrc, kareemDst)) copiedPacks++
+        }
+
+        val moonSrc = findMoonshineModelDir(context)
+        val moonDst = File(persistentModelsRoot, getFolderNameForPack(PACK_MOONSHINE_AR))
+        if (moonSrc != null &&
+            moonSrc.canonicalPath != moonDst.canonicalPath &&
+            !isValidMoonshineDir(moonDst)
+        ) {
+            if (copyDirRecursively(moonSrc, moonDst)) copiedPacks++
         }
 
         for (packId in listOf(PACK_DARIJA_TN, PACK_FUSHA_MGB2)) {

@@ -54,12 +54,12 @@ object InAppArabicTtsEngine {
     @Synchronized
     fun ensureInitialized(context: Context): Boolean {
         val appCtx = context.applicationContext
-        val dir = SdCardModelLocator.findKareemTtsDir(appCtx) ?: return false
+        val dir = SdCardModelLocator.findBestOfflineTtsDir(appCtx) ?: return false
         if (offlineTts != null && loadedPath == dir.absolutePath) return true
 
         return try {
             offlineTts?.release()
-            val onnxFile = File(dir, "ar_JO-kareem-low.onnx")
+            val onnxFile = SdCardModelLocator.findVitsOnnxFile(dir) ?: return false
             val tokensFile = File(dir, "tokens.txt")
             val espeakDir = File(dir, "espeak-ng-data")
             if (!onnxFile.exists() || !tokensFile.exists() || !espeakDir.exists()) {
@@ -71,8 +71,8 @@ object InAppArabicTtsEngine {
                         model = onnxFile.absolutePath,
                         tokens = tokensFile.absolutePath,
                         dataDir = espeakDir.absolutePath,
-                        noiseScale = 0.6f,
-                        noiseScaleW = 0.75f,
+                        noiseScale = 0.667f,
+                        noiseScaleW = 0.8f,
                         lengthScale = 1.0f
                     ),
                     numThreads = 2,
@@ -90,7 +90,7 @@ object InAppArabicTtsEngine {
         }
     }
 
-    fun isInstalled(context: Context): Boolean = SdCardModelLocator.findKareemTtsDir(context.applicationContext) != null
+    fun isInstalled(context: Context): Boolean = SdCardModelLocator.findBestOfflineTtsDir(context.applicationContext) != null
 
     fun reloadModel(context: Context) {
         val appCtx = context.applicationContext
@@ -145,18 +145,18 @@ object InAppArabicTtsEngine {
 
             notifySpeaking(true)
             try {
-                val prepared = prepareArabicForPiper(arabicText)
+                val prepared = ArabicNumberToWords.prepareForFushaTts(arabicText)
                 val phrases = splitIntoSmoothPhrases(prepared)
                 for (index in phrases.indices) {
                     if (myGen != generationId.get()) break
                     val phrase = phrases[index]
                     if (phrase.isBlank()) continue
-                    val generated = engine.generate(text = phrase, sid = 0, speed = 1.0f)
+                    val generated = engine.generate(text = phrase, sid = 0, speed = 0.96f)
                     if (generated.samples.isNotEmpty() && generated.sampleRate > 0) {
                         playSamplesStaticAndWait(generated.samples, generated.sampleRate, attrs, myGen)
                     }
                     if (index < phrases.lastIndex && myGen == generationId.get()) {
-                        Thread.sleep(65L)
+                        Thread.sleep(75L)
                     }
                 }
             } catch (_: Throwable) {
@@ -181,20 +181,20 @@ object InAppArabicTtsEngine {
     }
 
     private fun splitIntoSmoothPhrases(text: String): List<String> {
-        val rawParts = text.split('.', '،', '!', '؟', '\n')
+        val rawParts = text.split('.', '،', ',', '!', '؟', '\n')
             .map { it.trim() }
             .filter { it.isNotEmpty() }
         if (rawParts.isEmpty()) return listOf(text)
 
         val result = mutableListOf<String>()
         for (part in rawParts) {
-            if (part.length <= 130) {
+            if (part.length <= 115) {
                 result.add(part)
             } else {
                 val words = part.split(" ")
                 val sb = StringBuilder()
                 for (w in words) {
-                    if (sb.length + w.length + 1 > 125 && sb.isNotEmpty()) {
+                    if (sb.length + w.length + 1 > 110 && sb.isNotEmpty()) {
                         result.add(sb.toString().trim())
                         sb.clear()
                     }
@@ -291,24 +291,5 @@ object InAppArabicTtsEngine {
             } catch (_: Throwable) {
             }
         }
-    }
-
-    private fun prepareArabicForPiper(input: String): String {
-        return input
-            .replace("24/24", " أربعة وعشرين على أربعة وعشرين ")
-            .replace("M13", " إم ثلاثة عشر ", ignoreCase = true)
-            .replace("%", " بالمئة ")
-            .replace("MB", " ميغابايت ", ignoreCase = true)
-            .replace("GB", " جيغابايت ", ignoreCase = true)
-            .replace("OK Google", " أوكي غوغل ", ignoreCase = true)
-            .replace("Free Fire", " فري فاير ", ignoreCase = true)
-            .replace("Facebook", " فيسبوك ", ignoreCase = true)
-            .replace("WhatsApp", " واتساب ", ignoreCase = true)
-            .replace("Accessibility", " التحكم الشامل ", ignoreCase = true)
-            .replace("Write Settings", " تعديل الإعدادات ", ignoreCase = true)
-            .replace("RAM", " الرام ", ignoreCase = true)
-            .replace("/", " على ")
-            .replace(Regex("\\s+"), " ")
-            .trim()
     }
 }

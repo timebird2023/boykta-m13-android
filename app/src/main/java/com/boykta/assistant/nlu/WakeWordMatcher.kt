@@ -40,6 +40,8 @@ object WakeWordMatcher {
         "بويكاتا",
         "بوكاتا",
         "بوياكتا",
+        "بواكتا",
+        "بو يقتا",
         "بويك تا",
         "بوي كتا",
         "بو يكتا",
@@ -63,7 +65,7 @@ object WakeWordMatcher {
 
     fun normalize(input: String): String {
         return input.trim()
-            .replace(Regex("[\u064B-\u065F\u0670]"), "")
+            .replace(Regex("[\u064B-\u065F\u0670\u0640]"), "")
             .replace('أ', 'ا')
             .replace('إ', 'ا')
             .replace('آ', 'ا')
@@ -137,7 +139,7 @@ object WakeWordMatcher {
             i++
         }
         return kept.joinToString(" ")
-            .replace(Regex("^(يا|اهلا|اوكي|اسمع|خويا)\\s+"), "")
+            .replace(Regex("^(يا|اهلا|اوكي|اسمع|خويا|من فضلك)\\s+"), "")
             .replace(Regex("\\s+"), " ")
             .trim()
     }

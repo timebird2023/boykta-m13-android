@@ -12,6 +12,10 @@ import java.util.zip.ZipInputStream
 
 object ModelDownloader {
 
+    // Neural Moonshine Base Arabic Quantized ASR (~114MB)
+    private const val MOONSHINE_AR_URL =
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-base-ar-quantized-2026-02-27.tar.bz2"
+
     // Official Standard Arabic Fusha Vosk model (~318MB)
     private const val FUSHA_MGB2_URL =
         "https://alphacephei.com/vosk/models/vosk-model-ar-mgb2-0.4.zip"
@@ -20,19 +24,28 @@ object ModelDownloader {
     private const val DARIJA_TN_URL =
         "https://alphacephei.com/vosk/models/vosk-model-small-ar-tn-0.1-linto.zip"
 
-    // Self-contained In-App Offline Male Arabic Neural Voice (Piper Kareem ~64MB)
+    // High-Clarity Offline Male Arabic Fusha Voice (Piper Miro V2 High ~64MB)
+    private const val MIRO_V2_TTS_URL =
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ar_JO-SA_miro_V2-high.tar.bz2"
+
+    // Legacy Kareem Offline Male Arabic Voice (~64MB)
     private const val KAREEM_TTS_URL =
         "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ar_JO-kareem-low.tar.bz2"
 
     fun downloadAndExtractArabicModel(
         context: Context,
-        packId: String = SdCardModelLocator.PACK_FUSHA_MGB2,
+        packId: String = SdCardModelLocator.PACK_MOONSHINE_AR,
         onProgress: (Int, String) -> Unit,
         onComplete: (Boolean, String) -> Unit
     ) {
-        val isTarBz2 = packId == SdCardModelLocator.PACK_TTS_KAREEM
+        val isTarBz2 = packId == SdCardModelLocator.PACK_TTS_MIRO ||
+            packId == SdCardModelLocator.PACK_TTS_KAREEM ||
+            packId == SdCardModelLocator.PACK_MOONSHINE_AR
+
         val downloadUrl = when (packId) {
+            SdCardModelLocator.PACK_TTS_MIRO -> MIRO_V2_TTS_URL
             SdCardModelLocator.PACK_TTS_KAREEM -> KAREEM_TTS_URL
+            SdCardModelLocator.PACK_MOONSHINE_AR -> MOONSHINE_AR_URL
             SdCardModelLocator.PACK_DARIJA_TN -> DARIJA_TN_URL
             else -> FUSHA_MGB2_URL
         }
@@ -54,7 +67,7 @@ object ModelDownloader {
                 conn.connect()
 
                 if (conn.responseCode !in 200..299) {
-                    onComplete(false, "تعذر التحميل من السيرفر (رمز ${conn.responseCode}).")
+                    onComplete(false, "تعذر التحميل من الخادم (رمز ${conn.responseCode}).")
                     return@Thread
                 }
 
@@ -75,7 +88,7 @@ object ModelDownloader {
                     }
                 }
 
-                onProgress(80, "جاري فك ضغط الحزمة على بطاقة الذاكرة...")
+                onProgress(80, "جاري فك ضغط الحزمة على بطاقة التخزين...")
                 if (targetDir.exists()) targetDir.deleteRecursively()
                 targetDir.mkdirs()
 
@@ -86,7 +99,7 @@ object ModelDownloader {
                 }
 
                 archiveFile.delete()
-                onProgress(100, "اكتمل التثبيت! بويكتا يعمل الآن 100% بدون إنترنت.")
+                onProgress(100, "اكتمل التثبيت، بويكتا يعمل الآن بدون إنترنت.")
                 onComplete(true, "تم التثبيت بنجاح في: ${targetDir.absolutePath}")
             } catch (e: Exception) {
                 onComplete(false, "فشل التحميل: ${e.localizedMessage ?: "تأكد من الاتصال بالواي فاي"}")

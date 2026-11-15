@@ -1,5 +1,6 @@
 package com.boykta.assistant.service
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.AlarmManager
 import android.app.Notification
@@ -11,11 +12,15 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.graphics.PixelFormat
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
@@ -42,12 +47,22 @@ import com.boykta.assistant.nlu.DarijaIntentRouter
 import com.boykta.assistant.nlu.WakeWordMatcher
 import com.boykta.assistant.storage.SdCardModelLocator
 import com.boykta.assistant.ui.BoyktaRobotView
+import com.k2fsa.sherpa.onnx.FeatureConfig
+import com.k2fsa.sherpa.onnx.OfflineModelConfig
+import com.k2fsa.sherpa.onnx.OfflineMoonshineModelConfig
+import com.k2fsa.sherpa.onnx.OfflineRecognizer
+import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
+import com.k2fsa.sherpa.onnx.SileroVadModelConfig
+import com.k2fsa.sherpa.onnx.Vad
+import com.k2fsa.sherpa.onnx.VadModelConfig
 import org.json.JSONObject
 import org.vosk.Model
 import org.vosk.Recognizer
 import org.vosk.android.RecognitionListener
 import org.vosk.android.SpeechService
 import java.io.File
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListener {
 
@@ -63,6 +78,8 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
         const val LISTEN_HEADSET = true
         const val FLOATING_BUBBLE_ENABLED = false
     }
+
+    private enum class AsrBackend { NONE, MOONSHINE, VOSK }
 
     private var windowManager: WindowManager? = null
     private var bubbleView: View? = null
@@ -80,15 +97,31 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
     private lateinit var ttsManager: MaleTtsManager
     private var wakeLock: PowerManager.WakeLock? = null
 
+    // Engine 1: Silero VAD + Moonshine Base Arabic (114MB high-accuracy neural ASR)
+    private var vadEngine: Vad? = null
+    private var moonshineRecognizer: OfflineRecognizer? = null
+    private var loadedMoonshinePath: String? = null
+    private var audioRecord: AudioRecord? = null
+    private var audioThread: Thread? = null
+    private val isMoonshineLoopRunning = AtomicBoolean(false)
+    private val moonshineExecutor = Executors.newSingleThreadExecutor()
+
+    // Engine 2: Legacy Vosk fallback
     private var voskModel: Model? = null
-    private var loadedModelPath: String? = null
+    private var loadedVoskPath: String? = null
     private var speechService: SpeechService? = null
+
+    @Volatile
+    private var activeBackend: AsrBackend = AsrBackend.NONE
 
     @Volatile
     private var isLoadingModel = false
 
     @Volatile
     private var isSpeakingNow = false
+
+    @Volatile
+    private var echoCooldownUntilMs = 0L
 
     @Volatile
     private var awakeCommandUntilMs = 0L
@@ -128,8 +161,26 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
             context = this,
             onSpeakingChanged = { speaking ->
                 isSpeakingNow = speaking
+                if (!speaking) {
+                    echoCooldownUntilMs = System.currentTimeMillis() + 420L
+                    try {
+                        vadEngine?.reset()
+                    } catch (_: Throwable) {
+                    }
+                }
                 try {
-                    speechService?.setPause(speaking)
+                    if (speaking) {
+                        speechService?.setPause(true)
+                    } else {
+                        mainHandler.postDelayed({
+                            if (!isSpeakingNow) {
+                                try {
+                                    speechService?.setPause(false)
+                                } catch (_: Exception) {
+                                }
+                            }
+                        }, 380L)
+                    }
                 } catch (_: Exception) {
                 }
                 mainHandler.post {
@@ -194,7 +245,7 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
             }
             BoyktaEvents.ACTION_SIMULATE_WAKE -> {
                 isTeachingWakeMode = false
-                triggerOkGoogleWakeUi("راني نسمع فيك خويا — قولي واش تحب!")
+                triggerOkGoogleWakeUi("أنا أسمعك الآن، تفضل بأمرك.")
             }
             BoyktaEvents.ACTION_TEACH_WAKE_START -> {
                 isTeachingWakeMode = true
@@ -209,7 +260,7 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
                 mainHandler.postDelayed(hideWakeSheetRunnable, 9500L)
             }
             else -> {
-                if (voskModel == null) {
+                if (activeBackend == AsrBackend.NONE) {
                     loadOfflineArabicModel(forceReload = false)
                 } else {
                     evaluateBatterySafeListeningGate()
@@ -239,31 +290,109 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
         Thread {
             isLoadingModel = true
             try {
-                val dir: File? = SdCardModelLocator.findActiveVoskModelDir(this)
-                if (dir == null) {
-                    broadcastState(
-                        BoyktaEvents.TYPE_ERROR,
-                        "بانتظار تحميل حزمة الدارجة (158MB) أو الفصحى (318MB) على بطاقة الذاكرة."
-                    )
-                    updateNotification("بانتظار تحميل حزمة السمع العربية على SD")
-                    return@Thread
-                }
+                val selectedPack = SdCardModelLocator.getSelectedPack(this)
+                val moonshineDir = SdCardModelLocator.findMoonshineModelDir(this)
+                val voskDir = SdCardModelLocator.findActiveVoskModelDir(this)
 
-                if (!forceReload && voskModel != null && loadedModelPath == dir.absolutePath) {
+                // Priority 1: Moonshine Base Arabic (114MB neural model) + Silero VAD v5
+                val shouldUseMoonshine = moonshineDir != null &&
+                    (selectedPack == SdCardModelLocator.PACK_MOONSHINE_AR || voskDir == null)
+
+                if (shouldUseMoonshine && moonshineDir != null) {
+                    if (!forceReload && activeBackend == AsrBackend.MOONSHINE &&
+                        moonshineRecognizer != null && loadedMoonshinePath == moonshineDir.absolutePath
+                    ) {
+                        evaluateBatterySafeListeningGate()
+                        return@Thread
+                    }
+
+                    broadcastState(BoyktaEvents.TYPE_STATUS, "جاري تشغيل محرك السمع العصبي Moonshine...")
+                    stopRecognizerStream()
+                    try {
+                        voskModel?.close()
+                    } catch (_: Throwable) {
+                    }
+                    voskModel = null
+                    loadedVoskPath = null
+
+                    try {
+                        vadEngine?.release()
+                    } catch (_: Throwable) {
+                    }
+                    try {
+                        moonshineRecognizer?.release()
+                    } catch (_: Throwable) {
+                    }
+
+                    val vadCfg = VadModelConfig(
+                        sileroVadModelConfig = SileroVadModelConfig(
+                            model = "silero_vad.onnx",
+                            threshold = 0.44f,
+                            minSilenceDuration = 0.35f,
+                            minSpeechDuration = 0.22f,
+                            windowSize = 512,
+                            maxSpeechDuration = 8.0f
+                        ),
+                        sampleRate = 16000,
+                        numThreads = 1,
+                        provider = "cpu",
+                        debug = false
+                    )
+                    vadEngine = Vad(assetManager = assets, config = vadCfg)
+
+                    val recognizerCfg = OfflineRecognizerConfig(
+                        featConfig = FeatureConfig(sampleRate = 16000, featureDim = 80),
+                        modelConfig = OfflineModelConfig(
+                            moonshine = OfflineMoonshineModelConfig(
+                                encoder = File(moonshineDir, "encoder_model.ort").absolutePath,
+                                mergedDecoder = File(moonshineDir, "decoder_model_merged.ort").absolutePath
+                            ),
+                            tokens = File(moonshineDir, "tokens.txt").absolutePath,
+                            numThreads = 2,
+                            debug = false,
+                            provider = "cpu"
+                        )
+                    )
+                    moonshineRecognizer = OfflineRecognizer(assetManager = null, config = recognizerCfg)
+                    loadedMoonshinePath = moonshineDir.absolutePath
+                    activeBackend = AsrBackend.MOONSHINE
                     evaluateBatterySafeListeningGate()
                     return@Thread
                 }
 
-                broadcastState(BoyktaEvents.TYPE_STATUS, "جاري تحميل نموذج السمع على الذاكرة...")
-                stopRecognizerStream()
-                voskModel?.close()
-                voskModel = Model(dir.absolutePath)
-                loadedModelPath = dir.absolutePath
-                evaluateBatterySafeListeningGate()
-            } catch (e: Exception) {
+                // Priority 2: Vosk offline packs if Moonshine is not installed yet
+                if (voskDir != null) {
+                    if (!forceReload && activeBackend == AsrBackend.VOSK &&
+                        voskModel != null && loadedVoskPath == voskDir.absolutePath
+                    ) {
+                        evaluateBatterySafeListeningGate()
+                        return@Thread
+                    }
+
+                    broadcastState(BoyktaEvents.TYPE_STATUS, "جاري تحميل حزمة السمع العربية...")
+                    stopRecognizerStream()
+                    try {
+                        voskModel?.close()
+                    } catch (_: Throwable) {
+                    }
+                    voskModel = Model(voskDir.absolutePath)
+                    loadedVoskPath = voskDir.absolutePath
+                    activeBackend = AsrBackend.VOSK
+                    evaluateBatterySafeListeningGate()
+                    return@Thread
+                }
+
+                activeBackend = AsrBackend.NONE
                 broadcastState(
                     BoyktaEvents.TYPE_ERROR,
-                    "تعذر تشغيل نموذج الصوت: ${e.localizedMessage ?: "أعد التحميل"}"
+                    "بانتظار تحميل محرك السمع الذكي Moonshine (114MB) من التطبيق."
+                )
+                updateNotification("بانتظار تحميل محرك السمع Moonshine (114MB)")
+            } catch (e: Throwable) {
+                activeBackend = AsrBackend.NONE
+                broadcastState(
+                    BoyktaEvents.TYPE_ERROR,
+                    "تعذر تشغيل محرك السمع: ${e.localizedMessage ?: "يرجى إعادة التثبيت"}"
                 )
             } finally {
                 isLoadingModel = false
@@ -443,27 +572,29 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
     }
 
     private fun onBubbleTapped() {
-        if (voskModel == null) {
-            ttsManager.speak("أهلا خويا، افتح التطبيق وحمل حزمة الفصحى أو الدارجة على بطاقة الذاكرة باش نسمعك بلا انترنت.")
+        if (activeBackend == AsrBackend.NONE) {
+            ttsManager.speak("يرجى فتح التطبيق وتحميل محرك السمع الذكي حتى أتمكن من سماعك.")
             quickDrawer?.visibility =
                 if (quickDrawer?.visibility == View.VISIBLE) View.GONE else View.VISIBLE
             return
         }
-        triggerOkGoogleWakeUi("راني نسمع فيك خويا...")
-        ttsManager.speak("راني نسمع فيك خويا")
+        triggerOkGoogleWakeUi("أنا أسمعك الآن، تفضل بأمرك.")
+        ttsManager.speak("أنا أسمعك الآن.")
     }
 
     private fun evaluateBatterySafeListeningGate() {
-        if (voskModel == null) {
+        if (activeBackend == AsrBackend.NONE) {
             updateBubbleLabel("بلا حزمة")
             return
         }
 
+        val engineTag = if (activeBackend == AsrBackend.MOONSHINE) "Moonshine الذكي" else "Vosk"
+
         if (ALWAYS_ON_24_7) {
             startRecognizerStream()
             updateBubbleLabel("24/24")
-            updateNotification("الميكروفون نشط 24/24 — قل بويكتا الآن")
-            broadcastState(BoyktaEvents.TYPE_STATUS, "الميكروفون نشط 24/24 — قل «بويكتا» الآن!")
+            updateNotification("بويكتا نشط 24/24 ($engineTag) — قل بويكتا")
+            broadcastState(BoyktaEvents.TYPE_STATUS, "نشط على مدار الساعة ($engineTag) — قل «بويكتا» الآن!")
             return
         }
 
@@ -480,8 +611,8 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
         if (!lowBatteryStop && !pocketStop && allowedContext) {
             startRecognizerStream()
             updateBubbleLabel("بويكتا")
-            updateNotification("الميكروفون نشط — قل بويكتا")
-            broadcastState(BoyktaEvents.TYPE_STATUS, "الميكروفون نشط — قل «بويكتا»!")
+            updateNotification("الميكروفون نشط ($engineTag) — قل بويكتا")
+            broadcastState(BoyktaEvents.TYPE_STATUS, "الميكروفون نشط ($engineTag) — قل «بويكتا»!")
         } else if (!manualTriggerActive) {
             stopRecognizerStream()
             val label = if (pocketStop) "في الجيب" else "نايم"
@@ -491,6 +622,20 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
     }
 
     private fun startRecognizerStream() {
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.RECORD_AUDIO
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            broadcastState(BoyktaEvents.TYPE_ERROR, "يرجى منح إذن الميكروفون أولاً.")
+            return
+        }
+
+        if (activeBackend == AsrBackend.MOONSHINE) {
+            startMoonshineVadLoop()
+            return
+        }
+
         val model = voskModel ?: return
         if (speechService != null) {
             try {
@@ -514,7 +659,133 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
         }
     }
 
+    @SuppressLint("MissingPermission")
+    private fun startMoonshineVadLoop() {
+        val vad = vadEngine ?: return
+        val recognizer = moonshineRecognizer ?: return
+        if (isMoonshineLoopRunning.get()) return
+
+        val sampleRate = 16000
+        val minBytes = AudioRecord.getMinBufferSize(
+            sampleRate,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        ).coerceAtLeast(2048)
+
+        val recorder = try {
+            AudioRecord(
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                sampleRate,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                minBytes * 2
+            )
+        } catch (e: Throwable) {
+            broadcastState(BoyktaEvents.TYPE_ERROR, "تعذر تشغيل الميكروفون: ${e.localizedMessage ?: ""}")
+            return
+        }
+
+        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+            recorder.release()
+            broadcastState(BoyktaEvents.TYPE_ERROR, "الميكروفون غير متاح حالياً.")
+            return
+        }
+
+        audioRecord = recorder
+        isMoonshineLoopRunning.set(true)
+        try {
+            vad.reset()
+            recorder.startRecording()
+        } catch (e: Throwable) {
+            isMoonshineLoopRunning.set(false)
+            recorder.release()
+            audioRecord = null
+            return
+        }
+
+        audioThread = Thread {
+            val shortBuf = ShortArray(512)
+            var wasSpeakingDetected = false
+
+            while (isMoonshineLoopRunning.get()) {
+                val read = try {
+                    recorder.read(shortBuf, 0, shortBuf.size)
+                } catch (_: Throwable) {
+                    -1
+                }
+                if (read <= 0) continue
+
+                val now = System.currentTimeMillis()
+                if (isSpeakingNow || now < echoCooldownUntilMs) {
+                    if (wasSpeakingDetected) {
+                        wasSpeakingDetected = false
+                    }
+                    try {
+                        vad.clear()
+                    } catch (_: Throwable) {
+                    }
+                    continue
+                }
+
+                val floatSamples = FloatArray(read) { i -> shortBuf[i] / 32768.0f }
+                try {
+                    vad.acceptWaveform(floatSamples)
+                    val detected = vad.isSpeechDetected()
+                    if (detected && !wasSpeakingDetected) {
+                        wasSpeakingDetected = true
+                        broadcastState(BoyktaEvents.TYPE_PARTIAL, "يستمع لصوتك الآن...")
+                        mainHandler.post {
+                            wakeSheetHeard?.text = "جاري التقاط كلامك..."
+                        }
+                    } else if (!detected && wasSpeakingDetected) {
+                        wasSpeakingDetected = false
+                    }
+
+                    while (!vad.empty()) {
+                        val segment = vad.front()
+                        vad.pop()
+                        val segSamples = segment.samples
+                        if (segSamples.size >= 2400) {
+                            moonshineExecutor.execute {
+                                if (isSpeakingNow || System.currentTimeMillis() < echoCooldownUntilMs) {
+                                    return@execute
+                                }
+                                try {
+                                    val stream = recognizer.createStream()
+                                    stream.acceptWaveform(segSamples, sampleRate)
+                                    recognizer.decode(stream)
+                                    val text = recognizer.getResult(stream).text.trim()
+                                    stream.release()
+                                    if (text.isNotEmpty()) {
+                                        handleRecognizedUtterance(text)
+                                    }
+                                } catch (_: Throwable) {
+                                }
+                            }
+                        }
+                    }
+                } catch (_: Throwable) {
+                }
+            }
+        }.apply {
+            name = "boykta-vad-moonshine"
+            start()
+        }
+    }
+
     private fun stopRecognizerStream() {
+        isMoonshineLoopRunning.set(false)
+        try {
+            audioRecord?.stop()
+        } catch (_: Throwable) {
+        }
+        try {
+            audioRecord?.release()
+        } catch (_: Throwable) {
+        }
+        audioRecord = null
+        audioThread = null
+
         try {
             speechService?.stop()
             speechService?.shutdown()
@@ -524,7 +795,7 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
     }
 
     override fun onPartialResult(hypothesis: String?) {
-        if (isSpeakingNow) return
+        if (isSpeakingNow || System.currentTimeMillis() < echoCooldownUntilMs) return
         val json = hypothesis ?: return
         val partial = try {
             JSONObject(json).optString("partial", "").trim()
@@ -545,18 +816,24 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
         if (System.currentTimeMillis() > awakeCommandUntilMs &&
             WakeWordMatcher.containsWakeWord(partial, WAKE_WORD, this)
         ) {
-            triggerOkGoogleWakeUi("سمعتك خويا! كمل طلبك...")
+            triggerOkGoogleWakeUi("تم سماع ندائك، تفضل بأمرك...")
         }
     }
 
     override fun onResult(hypothesis: String?) {
-        if (isSpeakingNow) return
+        if (isSpeakingNow || System.currentTimeMillis() < echoCooldownUntilMs) return
         val json = hypothesis ?: return
         val text = try {
             JSONObject(json).optString("text", "").trim()
         } catch (_: Exception) {
             ""
         }
+        if (text.isEmpty()) return
+        handleRecognizedUtterance(text)
+    }
+
+    private fun handleRecognizedUtterance(rawText: String) {
+        val text = rawText.trim()
         if (text.isEmpty()) return
 
         broadcastState(BoyktaEvents.TYPE_PARTIAL, text)
@@ -575,7 +852,7 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
                 wakeSheetHeard?.text = displaySaved
             }
             mainHandler.postDelayed({ hideWakeOverlaySheet() }, 2000L)
-            ttsManager.speak("تم خويا، حفظت نطقك لكلمة بويكتا، غير تعيطلي دروك نستجيبلك فوراً.")
+            ttsManager.speak("حسناً، لقد حفظت نطقك لكلمة بويكتا بنجاح.")
             return
         }
 
@@ -588,9 +865,8 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
 
         val commandOnly = WakeWordMatcher.stripWakeWord(text, WAKE_WORD, this)
 
-        // If user ONLY said wake word, play short chime + keep mic 100% unpaused so follow-up command is never swallowed!
         if (commandOnly.isEmpty() && !isAwakeWindow) {
-            triggerOkGoogleWakeUi("نعم خويا؟ قولي أمرك الآن...")
+            triggerOkGoogleWakeUi("نعم، أنا أسمعك الآن. تفضل بأمرك.")
             return
         }
 
@@ -607,7 +883,7 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
 
         mainHandler.post {
             wakeSheetRobot?.setMood(BoyktaRobotView.Mood.HAPPY)
-            wakeSheetStatus?.text = "تم التنفيذ خويا!"
+            wakeSheetStatus?.text = "تم التنفيذ بنجاح"
             wakeSheetHeard?.text = reply
         }
         mainHandler.postDelayed({ hideWakeOverlaySheet() }, 2200L)
@@ -622,7 +898,7 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
 
     override fun onError(exception: Exception?) {
         stopRecognizerStream()
-        if (ALWAYS_ON_24_7 && voskModel != null) {
+        if (ALWAYS_ON_24_7 && activeBackend != AsrBackend.NONE) {
             mainHandler.postDelayed({ startRecognizerStream() }, 500L)
         }
     }
@@ -692,7 +968,18 @@ class BoyktaBackgroundService : Service(), SensorEventListener, RecognitionListe
     override fun onDestroy() {
         hideWakeOverlaySheet()
         stopRecognizerStream()
-        voskModel?.close()
+        try {
+            vadEngine?.release()
+        } catch (_: Throwable) {
+        }
+        try {
+            moonshineRecognizer?.release()
+        } catch (_: Throwable) {
+        }
+        try {
+            voskModel?.close()
+        } catch (_: Throwable) {
+        }
         try {
             unregisterReceiver(contextReceiver)
         } catch (_: Exception) {
